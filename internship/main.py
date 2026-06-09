@@ -97,7 +97,7 @@ def _parse_table(lines: list[str]) -> list[dict]:
         company = _cell_text(cells[col["company"]])
         role = _cell_text(cells[col["role"]])
 
-        if not company or not role or company.lower() == "company":
+        if not company or not role or company.lower() == "company" or company.startswith("↳"):
             continue
 
         if "location" in col and col["location"] < n:
@@ -225,14 +225,15 @@ def score_posting(company: str, role: str, location: str, company_summary: str) 
 
         score, resume = 5, "General SWE"
         for line in text.splitlines():
-            if line.startswith("SCORE:"):
+            ll = line.strip()
+            if ll.lower().startswith("score:"):
                 try:
-                    score = int(re.search(r"\d+", line.split(":", 1)[1]).group())
+                    score = int(re.search(r"\d+", ll.split(":", 1)[1]).group())
                     score = max(1, min(10, score))
                 except (AttributeError, ValueError):
-                    log.warning("Could not parse score from: %r", line)
-            elif line.startswith("RESUME:"):
-                candidate = line.split(":", 1)[1].strip()
+                    log.warning("Could not parse score from: %r", ll)
+            elif ll.lower().startswith("resume:"):
+                candidate = ll.split(":", 1)[1].strip()
                 if candidate in RESUME_OPTIONS:
                     resume = candidate
                 else:
