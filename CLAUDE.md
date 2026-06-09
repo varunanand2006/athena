@@ -23,9 +23,10 @@ question, err toward implementing and noting any assumptions made.
 - `docs/` — Architecture docs, phase notes, ADRs
 
 ## Hardware
-- `vlinux1` — 192.168.96.13, 8GB RAM, k3s control plane
-- `varun-linux` — 16GB RAM, workload=inference
-- `xdev-sr` — 16GB RAM, workload=ai
+- `vlinux1`  — 192.168.96.200, 8GB RAM, k3s control plane
+- `vlinux2`  — 192.168.96.202, 16GB RAM, workload=inference
+- `xdev-sr`  — 192.168.96.201, 16GB RAM, workload=ai
+- `varunlaptop` — 192.168.96.13, personal laptop (not a cluster node, used for SSH/kubectl only)
 
 ## Tech stack
 - **k3s** with Traefik ingress, Flannel networking
