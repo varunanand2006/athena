@@ -18,14 +18,15 @@ question, err toward implementing and noting any assumptions made.
 - `agent/` — LangGraph orchestration service (Python)
 - `mcp-server/` — Custom MCP server (Rust)
 - `ingestion/` — Document ingestion pipelines (LlamaIndex, Python)
+- `internship/` — Internship hunter service (APScheduler, daily pipeline)
 - `frontend/` — React web app
 - `scripts/` — Setup and utility scripts
 - `docs/` — Architecture docs, phase notes, ADRs
 
 ## Hardware
 - `vlinux1`  — 192.168.96.200, 8GB RAM, k3s control plane
-- `vlinux2`  — 192.168.96.202, 16GB RAM, workload=inference
-- `xdev-sr`  — 192.168.96.201, 16GB RAM, workload=ai
+- `vlinux2`  — 192.168.96.202, 16GB RAM, workload=inference; runs internship hunter, leetcode poller, ingestion pipeline, future frontend
+- `xdev-sr`  — 192.168.96.201, 16GB RAM, workload=ai; docker is installed here — use for image builds
 - `varunlaptop` — 192.168.96.13, personal laptop (not a cluster node, used for SSH/kubectl only)
 
 ## Tech stack
@@ -43,8 +44,9 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 1 — Cluster foundation. Focus is fresh k3s install, PostgreSQL,
-Qdrant, and Ollama deployment. Nothing else yet.
+Phase 5 — Internship Hunter. Daily pipeline that fetches CS internship postings
+from GitHub, scores them against the user's profile via Ollama, researches
+companies via SearXNG, and stores results in Postgres for agent queries.
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`
@@ -52,6 +54,12 @@ Qdrant, and Ollama deployment. Nothing else yet.
 - Rust code should be idiomatic — use `thiserror`, `tokio`, `axum`
 - Commit format: `type(scope): description` — e.g. `feat(agent): add web search tool`
 - Never commit secrets, `.env` files, or kubeconfig
+
+## Key lessons
+- **APScheduler pattern** — use `BlockingScheduler` from `apscheduler.schedulers.blocking` for polling services; run the pipeline once on startup before handing off to the scheduler so the first deploy is immediately testable
+- **Ollama token limits for CPU inference** — always pass `num_ctx: 2048, num_predict: 150` to keep responses fast on CPU; set httpx timeouts to 90s per call
+- **Image build workflow** — docker is on xdev-sr; build there, `docker save`, scp the tar to the target node, `sudo k3s ctr images import`; use `sudo chmod 644` on the tar before scp if saved with sudo
+- **kubectl exec stdin** — piping SQL via `< file` through `kubectl exec` is unreliable; use `kubectl cp` to copy the file into the pod then run `psql -f`
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components
