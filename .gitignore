@@ -20,6 +20,7 @@ kubeconfig
 
 # k8s sensitive
 *-secret.yaml
+secret.yaml
 
 # OS
 .DS_Store
