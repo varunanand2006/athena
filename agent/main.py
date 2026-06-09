@@ -1,10 +1,15 @@
+import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from langchain_ollama import ChatOllama
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
+
+_executor = ThreadPoolExecutor(max_workers=2)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
 SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://searxng.athena.svc.cluster.local:80")
@@ -52,7 +57,11 @@ class ChatResponse(BaseModel):
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     try:
-        result = agent.invoke({"messages": [{"role": "user", "content": req.message}]})
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor,
+            lambda: agent.invoke({"messages": [{"role": "user", "content": req.message}]}),
+        )
         last = result["messages"][-1]
         return ChatResponse(response=last.content)
     except Exception as e:
