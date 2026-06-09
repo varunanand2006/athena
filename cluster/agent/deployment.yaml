@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: athena
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      nodeSelector:
+        workload: ai
+      enableServiceLinks: false
+      containers:
+        - name: agent
+          image: athena-agent:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.athena.svc.cluster.local:11434"
+            - name: SEARXNG_BASE_URL
+              value: "http://searxng.athena.svc.cluster.local:80"
+            - name: OLLAMA_MODEL
+              value: "gemma4:e2b"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
