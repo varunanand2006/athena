@@ -21,7 +21,7 @@ spec:
           image: athena-leetcode:latest
           imagePullPolicy: Never
           env:
-            - name: LEETCODE_USERNAME
+            - name: varunanand2006
               value: "changeme"
             - name: OLLAMA_BASE_URL
               value: "http://ollama.athena.svc.cluster.local:11434"
