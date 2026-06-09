@@ -181,12 +181,14 @@ def research_company(company: str) -> str:
     try:
         with httpx.Client(timeout=90) as client:
             resp = client.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+                f"{OLLAMA_URL}/api/chat",
+                json={"model": OLLAMA_MODEL, "think": False,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "stream": False,
                       "options": {"num_ctx": 2048, "num_predict": 150}},
             )
             resp.raise_for_status()
-            return resp.json()["response"].strip()
+            return resp.json()["message"]["content"].strip()
     except Exception as e:
         log.warning("Ollama company research failed for %s: %s", company, e)
         return f"{company} is a technology company."
@@ -216,12 +218,14 @@ def score_posting(company: str, role: str, location: str, company_summary: str) 
     try:
         with httpx.Client(timeout=90) as client:
             resp = client.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+                f"{OLLAMA_URL}/api/chat",
+                json={"model": OLLAMA_MODEL, "think": False,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "stream": False,
                       "options": {"num_ctx": 2048, "num_predict": 150}},
             )
             resp.raise_for_status()
-            text = resp.json()["response"].strip()
+            text = resp.json()["message"]["content"].strip()
 
         score, resume = 5, "General SWE"
         for line in text.splitlines():
