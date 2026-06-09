@@ -1,16 +1,15 @@
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
+from llama_index.core import SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.ollama import OllamaEmbedding
-from llama_index.vector_stores.qdrant import QdrantVectorStore
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant.athena.svc.cluster.local:6333")
@@ -19,13 +18,7 @@ COLLECTION = "documents"
 EMBED_DIM = 768
 
 app = FastAPI(title="Athena Ingestion")
-
 qdrant = QdrantClient(url=QDRANT_URL)
-
-embed_model = OllamaEmbedding(
-    model_name=EMBED_MODEL,
-    base_url=OLLAMA_BASE_URL,
-)
 
 
 def _ensure_collection() -> None:
@@ -40,6 +33,16 @@ def _ensure_collection() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     _ensure_collection()
+
+
+def _embed(text: str) -> list[float]:
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(
+            f"{OLLAMA_BASE_URL}/api/embeddings",
+            json={"model": EMBED_MODEL, "prompt": text},
+        )
+        resp.raise_for_status()
+        return resp.json()["embedding"]
 
 
 class IngestResponse(BaseModel):
@@ -61,19 +64,22 @@ async def ingest(file: UploadFile = File(...)) -> IngestResponse:
         splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
         nodes = splitter.get_nodes_from_documents(docs)
 
-        vector_store = QdrantVectorStore(
-            client=qdrant,
-            collection_name=COLLECTION,
-        )
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        index = VectorStoreIndex(
-            nodes,
-            storage_context=storage_context,
-            embed_model=embed_model,
-            show_progress=False,
-        )
+        points = []
+        for node in nodes:
+            text = node.get_content().strip()
+            if not text:
+                continue
+            vector = _embed(text)
+            points.append(PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={"text": text, "filename": file.filename or "unknown"},
+            ))
 
-    return IngestResponse(filename=file.filename or "unknown", chunks=len(nodes))
+        if points:
+            qdrant.upsert(collection_name=COLLECTION, points=points)
+
+    return IngestResponse(filename=file.filename or "unknown", chunks=len(points))
 
 
 @app.get("/healthz")

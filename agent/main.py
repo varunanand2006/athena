@@ -70,18 +70,8 @@ def search_documents(query: str) -> str:
 
     lines = []
     for hit in hits:
-        payload = hit.get("payload", {})
+        text = hit.get("payload", {}).get("text", "").strip()
         score = hit.get("score", 0)
-        # LlamaIndex stores node text as a JSON string under _node_content
-        node_content_raw = payload.get("_node_content", "")
-        if node_content_raw:
-            try:
-                import json as _json
-                text = _json.loads(node_content_raw).get("text", "").strip()
-            except Exception:
-                text = ""
-        else:
-            text = payload.get("text", "").strip()
         if text:
             lines.append(f"[score={score:.2f}] {text[:400]}")
     return "\n\n".join(lines) if lines else "No relevant documents found."
