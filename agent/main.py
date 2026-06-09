@@ -94,7 +94,7 @@ def lookup_leetcode(query: str) -> str:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT DISTINCT ON (p.slug)
-                    p.title, p.difficulty, p.topics, p.solved_at, a.analysis_text
+                    p.title, p.difficulty, p.solved_at, a.analysis_text
                 FROM leetcode_problems p
                 LEFT JOIN leetcode_analysis a ON a.problem_slug = p.slug
                 ORDER BY p.slug, a.analyzed_at DESC NULLS LAST, p.solved_at DESC
@@ -114,9 +114,8 @@ def lookup_leetcode(query: str) -> str:
         return "No LeetCode data in the database yet."
 
     lines = ["=== Recent solved problems ==="]
-    for title, difficulty, topics, solved_at, analysis in problems:
-        topic_str = ", ".join(topics) if topics else "unknown"
-        lines.append(f"- {title} ({difficulty}) [{topic_str}] — {solved_at.strftime('%Y-%m-%d')}")
+    for title, difficulty, solved_at, analysis in problems:
+        lines.append(f"- {title} ({difficulty}) — {solved_at.strftime('%Y-%m-%d')}")
         if analysis:
             lines.append(f"  Analysis: {analysis}")
 
