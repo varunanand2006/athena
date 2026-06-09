@@ -14,7 +14,7 @@ spec:
         app: leetcode
     spec:
       nodeSelector:
-        kubernetes.io/hostname: vlinux1
+        kubernetes.io/hostname: vlinux2
       enableServiceLinks: false
       containers:
         - name: leetcode
