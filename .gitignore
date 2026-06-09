@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+.next/
+
+# Secrets
+*.env
+.env*
+secrets/
+kubeconfig
+
+# k8s sensitive
+*-secret.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+*.orig
+
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
