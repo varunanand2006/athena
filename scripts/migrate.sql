@@ -58,3 +58,7 @@ CREATE TABLE IF NOT EXISTS leetcode_analysis (
     analysis_text TEXT      NOT NULL,
     analyzed_at TIMESTAMPTZ NOT NULL
 );
+
+-- Phase 4 step 2 additions
+ALTER TABLE leetcode_problems ADD COLUMN IF NOT EXISTS topics TEXT[];
+ALTER TABLE leetcode_queue    ADD COLUMN IF NOT EXISTS submission_code TEXT;
