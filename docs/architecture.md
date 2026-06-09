@@ -70,7 +70,10 @@ User query  ──►  LangGraph agent  ──►  MCP server (tools)
 - External access via Traefik ingress:
   - `qdrant.local` → Qdrant HTTP API
   - `ollama.local` → Ollama API
-  - `athena.local` → React frontend (Phase 3+)
+  - `searxng.local` → SearXNG search API
+  - `agent.local` → LangGraph agent chat endpoint
+  - `ingest.local` → LlamaIndex ingestion endpoint
+  - `athena.local` → React frontend (Phase 4+)
 - `.local` hostnames require `/etc/hosts` entries pointing to `192.168.96.200`
 
 ---
@@ -82,4 +85,5 @@ User query  ──►  LangGraph agent  ──►  MCP server (tools)
 | PostgreSQL | vlinux1 | Control plane node, low memory use, stable |
 | Qdrant | xdev-sr (workload=ai) | Vector ops benefit from dedicated resources |
 | Ollama | xdev-sr (workload=ai) | 16GB RAM needed for model weights |
-| Agent/ingestion | vlinux2 (workload=inference) | CPU-bound Python workloads |
+| Agent | xdev-sr (workload=ai) | Needs access to Ollama and Qdrant on the same node |
+| Ingestion | xdev-sr (workload=ai) | Needs access to Ollama and Qdrant on the same node |
