@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: internship-hunter
+  namespace: athena
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: internship-hunter
+  template:
+    metadata:
+      labels:
+        app: internship-hunter
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vlinux2
+      enableServiceLinks: false
+      containers:
+        - name: internship-hunter
+          image: athena-internship:latest
+          imagePullPolicy: Never
+          env:
+            - name: OLLAMA_URL
+              value: "http://ollama.athena.svc.cluster.local:11434"
+            - name: OLLAMA_MODEL
+              value: "gemma4:e2b"
+            - name: SEARXNG_URL
+              value: "http://searxng.athena.svc.cluster.local"
+            - name: POSTGRES_HOST
+              value: "postgres.athena.svc.cluster.local"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
