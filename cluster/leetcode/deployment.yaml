@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leetcode
+  namespace: athena
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: leetcode
+  template:
+    metadata:
+      labels:
+        app: leetcode
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vlinux1
+      enableServiceLinks: false
+      containers:
+        - name: leetcode
+          image: athena-leetcode:latest
+          imagePullPolicy: Never
+          env:
+            - name: LEETCODE_USERNAME
+              value: "changeme"
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.athena.svc.cluster.local:11434"
+            - name: OLLAMA_MODEL
+              value: "gemma4:e2b"
+            - name: POSTGRES_HOST
+              value: "postgres.athena.svc.cluster.local"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
