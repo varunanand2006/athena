@@ -15,6 +15,16 @@ spec:
     spec:
       nodeSelector:
         workload: ai
+      enableServiceLinks: false
+      initContainers:
+        - name: copy-config
+          image: busybox:latest
+          command: ["sh", "-c", "cp /config-src/settings.yml /etc/searxng/settings.yml"]
+          volumeMounts:
+            - name: config-src
+              mountPath: /config-src
+            - name: config-dir
+              mountPath: /etc/searxng
       containers:
         - name: searxng
           image: searxng/searxng:latest
@@ -29,9 +39,8 @@ spec:
               cpu: 500m
               memory: 512Mi
           volumeMounts:
-            - name: config
-              mountPath: /etc/searxng/settings.yml
-              subPath: settings.yml
+            - name: config-dir
+              mountPath: /etc/searxng
           readinessProbe:
             httpGet:
               path: /healthz
@@ -39,6 +48,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
       volumes:
-        - name: config
+        - name: config-src
           configMap:
             name: searxng-config
+        - name: config-dir
+          emptyDir: {}
