@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-config
+  namespace: athena
+data:
+  settings.yml: |
+    use_default_settings: true
+
+    server:
+      limiter: false
+      secret_key: "athena-searxng-key-change-in-prod"
+
+    search:
+      formats:
+        - html
+        - json
