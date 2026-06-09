@@ -59,3 +59,19 @@ CREATE TABLE IF NOT EXISTS leetcode_analysis (
     analyzed_at TIMESTAMPTZ NOT NULL
 );
 
+-- Phase 5: Internship Hunter
+CREATE TABLE IF NOT EXISTS internship_postings (
+    id                    SERIAL PRIMARY KEY,
+    company               TEXT        NOT NULL,
+    role                  TEXT        NOT NULL,
+    location              TEXT        NOT NULL,
+    apply_link            TEXT,
+    priority_score        INTEGER,
+    resume_recommendation TEXT,
+    company_summary       TEXT,
+    status                TEXT        NOT NULL DEFAULT 'new',
+    found_date            DATE        NOT NULL DEFAULT CURRENT_DATE,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (company, role, location)
+);
+

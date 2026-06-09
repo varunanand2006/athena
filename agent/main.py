@@ -98,9 +98,8 @@ def lookup_leetcode(query: str) -> str:
                 FROM leetcode_problems p
                 LEFT JOIN leetcode_analysis a ON a.problem_slug = p.slug
                 ORDER BY p.slug, a.analyzed_at DESC NULLS LAST, p.solved_at DESC
-                LIMIT 50
             """)
-            problems = cur.fetchall()
+            all_problems = cur.fetchall()
 
             cur.execute("""
                 SELECT difficulty, COUNT(*) FROM leetcode_problems
@@ -110,18 +109,23 @@ def lookup_leetcode(query: str) -> str:
     finally:
         conn.close()
 
-    if not problems:
+    if not all_problems:
         return "No LeetCode data in the database yet."
 
-    lines = ["=== Recent solved problems ==="]
-    for title, difficulty, solved_at, analysis in problems:
-        lines.append(f"- {title} ({difficulty}) — {solved_at.strftime('%Y-%m-%d')}")
-        if analysis:
-            lines.append(f"  Analysis: {analysis}")
+    # Sort by solved_at descending for recency; show last 15
+    sorted_problems = sorted(all_problems, key=lambda r: r[2], reverse=True)
+    recent = sorted_problems[:15]
 
-    lines.append("\n=== Difficulty breakdown ===")
+    lines = ["=== Difficulty breakdown ==="]
     for diff, count in breakdown:
         lines.append(f"  {diff}: {count}")
+    lines.append(f"  Total: {sum(c for _, c in breakdown)}")
+
+    lines.append("\n=== 15 most recently solved ===")
+    for title, difficulty, solved_at, analysis in recent:
+        lines.append(f"- {title} ({difficulty}) — {solved_at.strftime('%Y-%m-%d')}")
+        if analysis:
+            lines.append(f"  Analysis: {analysis[:150]}")
 
     return "\n".join(lines)
 
