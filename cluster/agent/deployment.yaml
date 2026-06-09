@@ -34,6 +34,23 @@ spec:
               value: "nomic-embed-text"
             - name: OLLAMA_MODEL
               value: "gemma4:e2b"
+            - name: POSTGRES_HOST
+              value: "postgres.athena.svc.cluster.local"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
           resources:
             requests:
               cpu: 250m

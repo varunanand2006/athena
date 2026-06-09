@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir \
     "langgraph>=0.2" \
     "langchain-ollama>=0.2" \
     "langchain-core>=0.3" \
-    "httpx>=0.27"
+    "httpx>=0.27" \
+    "psycopg2-binary>=2.9"
 
 COPY main.py .
 
