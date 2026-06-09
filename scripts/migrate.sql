@@ -30,3 +30,31 @@ CREATE TABLE IF NOT EXISTS contacts (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS leetcode_problems (
+    id          SERIAL PRIMARY KEY,
+    title       TEXT        NOT NULL,
+    slug        TEXT        NOT NULL UNIQUE,
+    difficulty  TEXT        NOT NULL,
+    solved_at   TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS leetcode_submissions (
+    id          BIGINT      PRIMARY KEY,
+    problem_slug TEXT       NOT NULL,
+    difficulty  TEXT        NOT NULL,
+    submitted_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS leetcode_queue (
+    problem_slug TEXT        PRIMARY KEY,
+    submitted_at TIMESTAMPTZ NOT NULL,
+    queued_at   TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS leetcode_analysis (
+    id          SERIAL PRIMARY KEY,
+    problem_slug TEXT       NOT NULL,
+    analysis_text TEXT      NOT NULL,
+    analyzed_at TIMESTAMPTZ NOT NULL
+);
