@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -65,10 +65,11 @@ async def ingest(file: UploadFile = File(...)) -> IngestResponse:
             client=qdrant,
             collection_name=COLLECTION,
         )
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
         index = VectorStoreIndex(
             nodes,
+            storage_context=storage_context,
             embed_model=embed_model,
-            vector_store=vector_store,
             show_progress=False,
         )
 
