@@ -43,7 +43,15 @@ def web_search(query: str) -> str:
     return "\n".join(lines)
 
 
-agent = create_react_agent(llm, tools=[web_search])
+SYSTEM_PROMPT = (
+    "You are Athena, a personal AI assistant. "
+    "You have access to a web_search tool. "
+    "For any question about current events, job listings, prices, news, or anything "
+    "that may have changed recently, you MUST call web_search before answering. "
+    "Never say you cannot access current information — use the tool instead."
+)
+
+agent = create_react_agent(llm, tools=[web_search], prompt=SYSTEM_PROMPT)
 
 
 class ChatRequest(BaseModel):
