@@ -30,7 +30,9 @@ question, err toward implementing and noting any assumptions made.
 
 ## Tech stack
 - **k3s** with Traefik ingress, Flannel networking
-- **Ollama** running Gemma (local inference, CPU only — expect slow responses)
+- **Ollama** running Gemma 4 (local inference, CPU only — expect slow responses)
+  - Phase 1 testing: `gemma4:e2b` (5.12B params, Q4_K_M, 7.2GB)
+  - Swap to `gemma4:12b` when moving to real workloads
 - **LangGraph** for agent orchestration
 - **LlamaIndex** for document parsing and ingestion
 - **Qdrant** for vector search
