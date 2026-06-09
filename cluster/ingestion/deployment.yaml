@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestion
+  namespace: athena
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingestion
+  template:
+    metadata:
+      labels:
+        app: ingestion
+    spec:
+      nodeSelector:
+        workload: ai
+      enableServiceLinks: false
+      containers:
+        - name: ingestion
+          image: athena-ingestion:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.athena.svc.cluster.local:11434"
+            - name: QDRANT_URL
+              value: "http://qdrant.athena.svc.cluster.local:6333"
+            - name: EMBED_MODEL
+              value: "nomic-embed-text"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 10
