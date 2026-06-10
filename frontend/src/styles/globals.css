@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --accent: #4F46E5;
+  --accent-light: #EEF2FF;
+  --accent-hover: #4338CA;
+  --bg: #F8FAFC;
+  --card: #FFFFFF;
+  --border: #E2E8F0;
+  --text: #1E293B;
+  --text-muted: #64748B;
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 0;
+}
+
+/* Markdown rendering for agent responses */
+.prose-athena p {
+  margin: 0.4em 0;
+  line-height: 1.65;
+}
+.prose-athena p:first-child { margin-top: 0; }
+.prose-athena p:last-child  { margin-bottom: 0; }
+
+.prose-athena h1,
+.prose-athena h2,
+.prose-athena h3 {
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 0.9em;
+  margin-bottom: 0.3em;
+  line-height: 1.3;
+}
+.prose-athena h1 { font-size: 1.05rem; }
+.prose-athena h2 { font-size: 0.975rem; }
+.prose-athena h3 { font-size: 0.925rem; }
+.prose-athena h1:first-child,
+.prose-athena h2:first-child,
+.prose-athena h3:first-child { margin-top: 0; }
+
+.prose-athena ul,
+.prose-athena ol {
+  margin: 0.4em 0;
+  padding-left: 1.3em;
+}
+.prose-athena li { margin: 0.2em 0; }
+
+.prose-athena strong { font-weight: 600; }
+.prose-athena em    { font-style: italic; }
+
+.prose-athena code {
+  background: #F1F5F9;
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.prose-athena pre {
+  background: #F1F5F9;
+  padding: 0.8em 1em;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+.prose-athena pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+.prose-athena a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.prose-athena a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.prose-athena blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75em;
+  margin: 0.5em 0;
+  color: var(--text-muted);
+}
+
+.prose-athena hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.75em 0;
+}

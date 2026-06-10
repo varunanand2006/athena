@@ -19,13 +19,13 @@ question, err toward implementing and noting any assumptions made.
 - `mcp-server/` — Custom MCP server (Rust)
 - `ingestion/` — Document ingestion pipelines (LlamaIndex, Python)
 - `internship/` — Internship hunter service (APScheduler, daily pipeline)
-- `frontend/` — React web app
+- `frontend/` — React web app (Vite + TypeScript + Tailwind); served by nginx on vlinux2, proxies /chat /internships /leetcode to the agent
 - `scripts/` — Setup and utility scripts
 - `docs/` — Architecture docs, phase notes, ADRs
 
 ## Hardware
 - `vlinux1`  — 192.168.96.200, 8GB RAM, k3s control plane
-- `vlinux2`  — 192.168.96.202, 16GB RAM, workload=inference; runs internship hunter, leetcode poller, ingestion pipeline, future frontend
+- `vlinux2`  — 192.168.96.202, 16GB RAM, workload=services; runs internship hunter, leetcode poller, ingestion pipeline, frontend (athena.local)
 - `xdev-sr`  — 192.168.96.201, 16GB RAM, workload=ai; docker is installed here — use for image builds
 - `varunlaptop` — 192.168.96.13, personal laptop (not a cluster node, used for SSH/kubectl only)
 
@@ -44,9 +44,9 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 5 — Internship Hunter. Daily pipeline that fetches CS internship postings
-from GitHub, scores them against the user's profile via Ollama, researches
-companies via SearXNG, and stores results in Postgres for agent queries.
+Phase 6 — Frontend. React web app at athena.local served on vlinux2. Chat-first
+UI wired to the agent, plus a dashboard with internship pipeline, LeetCode stats,
+and recent activity. Agent exposes /internships and /leetcode REST endpoints.
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`
@@ -60,6 +60,9 @@ companies via SearXNG, and stores results in Postgres for agent queries.
 - **Ollama token limits for CPU inference** — always pass `num_ctx: 2048, num_predict: 150` to keep responses fast on CPU; set httpx timeouts to 90s per call
 - **Image build workflow** — docker is on xdev-sr; build there, `docker save`, scp the tar to the target node, `sudo k3s ctr images import`; use `sudo chmod 644` on the tar before scp if saved with sudo
 - **kubectl exec stdin** — piping SQL via `< file` through `kubectl exec` is unreliable; use `kubectl cp` to copy the file into the pod then run `psql -f`
+- **React/Vite multi-stage build** — Node 20 builder stage runs `npm ci && npm run build`; nginx:alpine serves `dist/`; keep `nginx.conf` next to the Dockerfile so the COPY path is predictable
+- **Nginx CORS proxy for SPA** — proxy `/chat`, `/internships`, `/leetcode` to the agent ClusterIP so the browser never hits a different origin; set `proxy_read_timeout 120s` for slow LLM responses
+- **Traefik ingress on vlinux2** — use `nodeSelector: workload: services` on the frontend Deployment; ingress host is `athena.local` pointing to 192.168.96.200 (control plane, where Traefik runs)
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components

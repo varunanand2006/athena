@@ -167,6 +167,68 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/internships")
+def internships():
+    conn = psycopg2.connect(_PG_DSN)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, company, role, location, priority_score,
+                       resume_recommendation, apply_link, found_date
+                FROM internship_postings
+                WHERE found_date = CURRENT_DATE
+                ORDER BY priority_score DESC
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return [
+        {
+            "id": r[0],
+            "company": r[1],
+            "role": r[2],
+            "location": r[3],
+            "priority_score": r[4] if r[4] is not None else 0,
+            "resume_recommendation": r[5] or "",
+            "apply_link": r[6],
+            "found_date": r[7].isoformat() if r[7] else None,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/leetcode")
+def leetcode():
+    conn = psycopg2.connect(_PG_DSN)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT difficulty, COUNT(*) FROM leetcode_problems GROUP BY difficulty"
+            )
+            breakdown = {row[0].lower(): int(row[1]) for row in cur.fetchall()}
+
+            cur.execute("SELECT MAX(solved_at) FROM leetcode_problems")
+            last_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    easy   = breakdown.get("easy", 0)
+    medium = breakdown.get("medium", 0)
+    hard   = breakdown.get("hard", 0)
+    last   = last_row[0].date().isoformat() if last_row and last_row[0] else None
+
+    return {
+        "total": easy + medium + hard,
+        "easy": easy,
+        "medium": medium,
+        "hard": hard,
+        "last_solved_date": last,
+    }
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
