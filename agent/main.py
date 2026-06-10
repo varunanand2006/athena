@@ -7,6 +7,7 @@ import psycopg2
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 
@@ -16,7 +17,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster
 SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://searxng.athena.svc.cluster.local:80")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant.athena.svc.cluster.local:6333")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
-MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 _PG_DSN = (
     f"postgresql://{os.getenv('POSTGRES_USER', 'athena')}"
@@ -27,7 +29,11 @@ _PG_DSN = (
 
 app = FastAPI(title="Athena Agent")
 
-llm = ChatOllama(base_url=OLLAMA_BASE_URL, model=MODEL, temperature=0)
+
+def get_llm(mode: str):
+    if mode == "background":
+        return ChatOllama(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL, temperature=0)
+    return ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0)
 
 
 @tool
@@ -142,11 +148,9 @@ SYSTEM_PROMPT = (
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
-agent = create_react_agent(llm, tools=[web_search, search_documents, lookup_leetcode], prompt=SYSTEM_PROMPT)
-
-
 class ChatRequest(BaseModel):
     message: str
+    mode: str = "chat"
 
 
 class ChatResponse(BaseModel):
@@ -156,6 +160,8 @@ class ChatResponse(BaseModel):
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     try:
+        llm = get_llm(req.mode)
+        agent = create_react_agent(llm, tools=[web_search, search_documents, lookup_leetcode], prompt=SYSTEM_PROMPT)
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             _executor,
