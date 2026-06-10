@@ -130,58 +130,19 @@ def lookup_leetcode(query: str) -> str:
     return "\n".join(lines)
 
 
-@tool
-def search_internships(query: str) -> str:
-    """Query internship postings from Postgres. Use for any question about
-    internships found today or this week, high-priority matches, resume
-    recommendations, application status, or unactioned postings."""
-    conn = psycopg2.connect(_PG_DSN)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT company, role, location, priority_score,
-                       resume_recommendation, company_summary,
-                       apply_link, status, found_date
-                FROM internship_postings
-                ORDER BY found_date DESC, priority_score DESC
-                LIMIT 50
-            """)
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-
-    if not rows:
-        return "No internship postings in the database yet."
-
-    lines = []
-    for company, role, location, score, resume, summary, link, status, found in rows:
-        lines.append(
-            f"[{found} | score={score}/10 | {status}] {company} — {role} | {location}\n"
-            f"  Resume: {resume} | Summary: {summary}\n"
-            f"  Link: {link or 'none'}"
-        )
-    return "\n\n".join(lines)
-
-
 SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
-    "You have access to four tools: web_search, search_documents, lookup_leetcode, and search_internships. "
+    "You have access to three tools: web_search, search_documents, and lookup_leetcode. "
     "For questions about the user's own background, resume, skills, projects, or experience, "
     "you MUST call search_documents before answering. "
     "For questions about LeetCode progress, solved problems, difficulty breakdown, "
     "patterns, or what to study next, you MUST call lookup_leetcode before answering. "
-    "For questions about internships, job postings, priority scores, resume recommendations, "
-    "or application status, you MUST call search_internships before answering. "
-    "For questions about current events, prices, or recent news, "
+    "For questions about current events, job listings, prices, or recent news, "
     "you MUST call web_search before answering. "
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
-agent = create_react_agent(
-    llm,
-    tools=[web_search, search_documents, lookup_leetcode, search_internships],
-    prompt=SYSTEM_PROMPT,
-)
+agent = create_react_agent(llm, tools=[web_search, search_documents, lookup_leetcode], prompt=SYSTEM_PROMPT)
 
 
 class ChatRequest(BaseModel):
