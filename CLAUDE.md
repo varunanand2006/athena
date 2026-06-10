@@ -15,7 +15,7 @@ question, err toward implementing and noting any assumptions made.
 
 ## Repo structure
 - `cluster/` — Kubernetes manifests (k3s, Traefik, node configs)
-- `agent/` — LangGraph orchestration service (Python)
+- `agent/` — LangGraph orchestration service (Python); interactive chat uses GPT-4o-mini, background tasks use gemma4:e2b
 - `mcp-server/` — Custom MCP server (Rust)
 - `ingestion/` — Document ingestion pipelines (LlamaIndex, Python)
 - `internship/` — Internship hunter service (APScheduler, daily pipeline)
@@ -44,9 +44,10 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 6 — Frontend. React web app at athena.local served on vlinux2. Chat-first
-UI wired to the agent, plus a dashboard with internship pipeline, LeetCode stats,
-and recent activity. Agent exposes /internships and /leetcode REST endpoints.
+Phase 7 — Model Router. Agent routes chat requests to GPT-4o-mini (fast, cloud)
+and background pipeline calls to gemma4:e2b (local, Ollama). Mode is set via the
+`mode` field on POST /chat — defaults to "chat". OpenAI key stored in
+`openai-secret` k8s secret in the athena namespace.
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`
@@ -63,6 +64,9 @@ and recent activity. Agent exposes /internships and /leetcode REST endpoints.
 - **React/Vite multi-stage build** — Node 20 builder stage runs `npm ci && npm run build`; nginx:alpine serves `dist/`; keep `nginx.conf` next to the Dockerfile so the COPY path is predictable
 - **Nginx CORS proxy for SPA** — proxy `/chat`, `/internships`, `/leetcode` to the agent ClusterIP so the browser never hits a different origin; set `proxy_read_timeout 120s` for slow LLM responses
 - **Pinning pods to vlinux2** — use `nodeSelector: kubernetes.io/hostname: vlinux2`, not a workload label; the existing `workload=inference` label on vlinux2 is unused by any manifest; ingress host `athena.local` points to 192.168.96.200 (control plane, where Traefik runs)
+- **Mode-based model routing** — POST /chat accepts an optional `mode` field ("chat" → GPT-4o-mini, "background" → Gemma via Ollama); agent and LangGraph graph are constructed per-request so the LLM swap is seamless
+- **langchain-openai** — add to both `pyproject.toml` AND `agent/Dockerfile` pip install list; the Dockerfile doesn't use pyproject.toml so they must be kept in sync manually
+- **k8s secrets** — always create secrets with `-n athena`; a secret in the default namespace is invisible to pods in the athena namespace and the pod will start with an empty env var rather than failing loudly
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components
