@@ -62,7 +62,7 @@ and recent activity. Agent exposes /internships and /leetcode REST endpoints.
 - **kubectl exec stdin** — piping SQL via `< file` through `kubectl exec` is unreliable; use `kubectl cp` to copy the file into the pod then run `psql -f`
 - **React/Vite multi-stage build** — Node 20 builder stage runs `npm ci && npm run build`; nginx:alpine serves `dist/`; keep `nginx.conf` next to the Dockerfile so the COPY path is predictable
 - **Nginx CORS proxy for SPA** — proxy `/chat`, `/internships`, `/leetcode` to the agent ClusterIP so the browser never hits a different origin; set `proxy_read_timeout 120s` for slow LLM responses
-- **Traefik ingress on vlinux2** — use `nodeSelector: workload: services` on the frontend Deployment; ingress host is `athena.local` pointing to 192.168.96.200 (control plane, where Traefik runs)
+- **Pinning pods to vlinux2** — use `nodeSelector: kubernetes.io/hostname: vlinux2`, not a workload label; the existing `workload=inference` label on vlinux2 is unused by any manifest; ingress host `athena.local` points to 192.168.96.200 (control plane, where Traefik runs)
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components

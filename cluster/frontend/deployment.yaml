@@ -14,7 +14,7 @@ spec:
         app: frontend
     spec:
       nodeSelector:
-        workload: services
+        kubernetes.io/hostname: vlinux2
       enableServiceLinks: false
       containers:
         - name: frontend
