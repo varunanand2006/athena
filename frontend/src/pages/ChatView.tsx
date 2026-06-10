@@ -22,6 +22,10 @@ function LoadingDots() {
   )
 }
 
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2)
+}
+
 function ts(date: Date) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
@@ -42,7 +46,7 @@ export default function ChatView({ messages, setMessages }: Props) {
     if (!text || loading) return
 
     const userMsg: Message = {
-      id: crypto.randomUUID(),
+      id: uid(),
       role: 'user',
       content: text,
       timestamp: new Date(),
@@ -59,7 +63,7 @@ export default function ChatView({ messages, setMessages }: Props) {
     try {
       const res = await axios.post('/chat', { message: text }, { timeout: 120_000 })
       const agentMsg: Message = {
-        id: crypto.randomUUID(),
+        id: uid(),
         role: 'assistant',
         content: res.data.response,
         timestamp: new Date(),
