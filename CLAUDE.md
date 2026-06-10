@@ -58,6 +58,7 @@ and background pipeline calls to gemma4:e2b (local, Ollama). Mode is set via the
 
 ## Key lessons
 - **APScheduler pattern** — use `BlockingScheduler` from `apscheduler.schedulers.blocking` for polling services; run the pipeline once on startup before handing off to the scheduler so the first deploy is immediately testable
+- **gemma4:e2b is a thinking model** — raw `/api/generate` returns empty `response` because all tokens are consumed by internal reasoning. Use `/api/chat` with `"think": false` for structured output tasks. Read from `message.content`, not `response`.
 - **Ollama token limits for CPU inference** — always pass `num_ctx: 2048, num_predict: 150` to keep responses fast on CPU; set httpx timeouts to 90s per call
 - **Image build workflow** — docker is on xdev-sr; build there, `docker save`, scp the tar to the target node, `sudo k3s ctr images import`; use `sudo chmod 644` on the tar before scp if saved with sudo
 - **kubectl exec stdin** — piping SQL via `< file` through `kubectl exec` is unreliable; use `kubectl cp` to copy the file into the pod then run `psql -f`
