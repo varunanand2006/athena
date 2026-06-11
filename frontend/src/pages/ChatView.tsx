@@ -6,6 +6,9 @@ import type { Message } from '../App'
 interface Props {
   messages: Message[]
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>
+  conversationId: string | null
+  setConversationId: (id: string) => void
+  onConversationUpdate: () => void
 }
 
 function LoadingDots() {
@@ -30,7 +33,13 @@ function ts(date: Date) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function ChatView({ messages, setMessages }: Props) {
+export default function ChatView({
+  messages,
+  setMessages,
+  conversationId,
+  setConversationId,
+  onConversationUpdate,
+}: Props) {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -61,7 +70,11 @@ export default function ChatView({ messages, setMessages }: Props) {
     }
 
     try {
-      const res = await axios.post('/chat', { message: text }, { timeout: 120_000 })
+      const res = await axios.post(
+        '/chat',
+        { message: text, conversation_id: conversationId },
+        { timeout: 120_000 }
+      )
       const agentMsg: Message = {
         id: uid(),
         role: 'assistant',
@@ -69,6 +82,10 @@ export default function ChatView({ messages, setMessages }: Props) {
         timestamp: new Date(),
       }
       setMessages((prev) => [...prev, agentMsg])
+      if (!conversationId) {
+        setConversationId(res.data.conversation_id)
+      }
+      onConversationUpdate()
     } catch {
       setError('Agent is unreachable — check that the agent pod is running.')
     } finally {
