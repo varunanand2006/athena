@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import axios from 'axios'
 import type { Message } from '../App'
