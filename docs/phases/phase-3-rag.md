@@ -32,7 +32,12 @@ Three tables, no agent integration yet — schema in place for future phases:
 - `tasks` (id, title, deadline, source, status, created_at, updated_at)
 - `contacts` (id, name, company, email, notes, created_at, updated_at)
 
-Applied with: `kubectl exec -i -n athena <postgres-pod> -- psql -U athena -d athena < scripts/migrate.sql`
+Applied with:
+```bash
+kubectl cp scripts/migrate.sql athena/<postgres-pod>:/tmp/migrate.sql
+kubectl exec -n athena <postgres-pod> -- psql -U athena -d athena -f /tmp/migrate.sql
+```
+Note: piping via `kubectl exec -i ... < file` is unreliable — use `kubectl cp` then `psql -f` instead.
 
 ---
 
@@ -69,4 +74,6 @@ sudo docker save athena-ingestion:latest | sudo k3s ctr images import -
 ---
 
 ## Next phase
-Phase 4 — React frontend and n8n pipelines for automated ingestion (email monitoring, internship tracker writes).
+Phase 5 — Internship hunter: daily automated pipeline to scrape postings, score them with Ollama, and store results in Postgres.
+
+Note: Phase 4 (Rust MCP server) was planned but deferred. n8n was also planned at this point but never deployed.

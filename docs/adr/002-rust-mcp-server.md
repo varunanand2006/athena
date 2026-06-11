@@ -1,7 +1,7 @@
 # ADR 002 — MCP Server in Rust
 
 **Date:** 2026-06-08  
-**Status:** Accepted
+**Status:** Accepted — Deferred (not yet started; `mcp-server/` directory is empty)
 
 ---
 

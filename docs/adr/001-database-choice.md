@@ -24,7 +24,7 @@ Use **PostgreSQL** for relational data and **Qdrant** for vector search. Run bot
 - Battle-tested, well-understood, excellent tooling
 - Handles everything structured: applications tracker, task queue, event log
 - Native JSON support covers semi-structured payloads without needing a separate document store
-- LangGraph can use it as a checkpointer for agent state persistence
+- LangGraph can use it as a checkpointer for agent state persistence (planned; not yet wired up — `create_react_agent` currently runs stateless)
 - Fits comfortably on vlinux1 (8GB RAM) given expected data volumes
 
 ## Qdrant — why

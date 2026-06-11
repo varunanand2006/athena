@@ -61,4 +61,4 @@ Stand up a working k3s cluster with PostgreSQL, Qdrant, and Ollama deployed and 
 ---
 
 ## Next phase
-Phase 2 — Agent & MCP server. LangGraph orchestration service and custom Rust MCP server.
+Phase 2 — LangGraph agent service with web search via SearXNG.

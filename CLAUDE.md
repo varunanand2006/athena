@@ -2,9 +2,9 @@
 
 ## What this project is
 Athena is a self-hosted AI assistant running on a bare-metal k3s cluster.
-It helps with internship tracking, email monitoring, LeetCode prep, research,
-and personal knowledge management. Think JARVIS — a background brain that
-surfaces relevant information and handles routine tasks.
+It helps with internship tracking, LeetCode prep, research, and personal knowledge management.
+Think JARVIS — a background brain that surfaces relevant information and handles routine tasks.
+Email monitoring and SMS notifications are planned but not yet implemented.
 
 ## Planning vs building
 **All architecture decisions and phase planning happen in Claude.ai chat.**
@@ -16,11 +16,12 @@ question, err toward implementing and noting any assumptions made.
 ## Repo structure
 - `cluster/` — Kubernetes manifests (k3s, Traefik, node configs)
 - `agent/` — LangGraph orchestration service (Python); interactive chat uses GPT-4o-mini, background tasks use gemma4:e2b
-- `mcp-server/` — Custom MCP server (Rust)
+- `mcp-server/` — Custom MCP server (Rust) — not yet implemented
 - `ingestion/` — Document ingestion pipelines (LlamaIndex, Python)
 - `internship/` — Internship hunter service (APScheduler, daily pipeline)
+- `leetcode/` — LeetCode poller service (APScheduler, daily GraphQL sync + Ollama analysis)
 - `frontend/` — React web app (Vite + TypeScript + Tailwind); served by nginx on vlinux2, proxies /chat /internships /leetcode to the agent
-- `scripts/` — Setup and utility scripts
+- `scripts/` — Setup and utility scripts (k3s setup, DB migrations, model pulls)
 - `docs/` — Architecture docs, phase notes, ADRs
 
 ## Hardware
