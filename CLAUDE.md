@@ -45,10 +45,13 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 7 — Model Router. Agent routes chat requests to GPT-4o-mini (fast, cloud)
-and background pipeline calls to gemma4:e2b (local, Ollama). Mode is set via the
-`mode` field on POST /chat — defaults to "chat". OpenAI key stored in
-`openai-secret` k8s secret in the athena namespace.
+Phase 8 — Multi-chat support. Conversations are stored in Postgres (`conversations`
+and `messages` tables). POST /chat accepts optional `conversation_id` for history
+continuity; omitting it creates a new conversation. Response always includes
+`conversation_id`. Additional endpoints: GET /conversations, GET
+/conversations/:id/messages, DELETE /conversations/:id. Frontend sidebar shows
+the conversation list with relative timestamps, active highlight, and per-row
+delete. Clicking a conversation loads its full history into the chat view.
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`
@@ -69,6 +72,9 @@ and background pipeline calls to gemma4:e2b (local, Ollama). Mode is set via the
 - **Mode-based model routing** — POST /chat accepts an optional `mode` field ("chat" → GPT-4o-mini, "background" → Gemma via Ollama); agent and LangGraph graph are constructed per-request so the LLM swap is seamless
 - **langchain-openai** — add to both `pyproject.toml` AND `agent/Dockerfile` pip install list; the Dockerfile doesn't use pyproject.toml so they must be kept in sync manually
 - **k8s secrets** — always create secrets with `-n athena`; a secret in the default namespace is invisible to pods in the athena namespace and the pod will start with an empty env var rather than failing loudly
+- **Multi-chat history** — pass full conversation history as the `messages` array to `create_react_agent`; load it from Postgres ordered by `created_at ASC` before every /chat call; the agent sees all prior turns as context
+- **UUID primary keys** — use `gen_random_uuid()` as the default for UUID PKs in Postgres; returns a `uuid` type, cast to `str` in Python before returning in JSON
+- **Postgres schema — conversations/messages** — `conversations(id uuid pk, title text, created_at, updated_at)`; `messages(id uuid pk, conversation_id uuid fk→conversations, role text, content text, created_at)`; index on `messages(conversation_id)`
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components
