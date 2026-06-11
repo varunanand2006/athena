@@ -62,7 +62,13 @@ LangGraph Agent — agent.local (xdev-sr)
       │              POST /ingest → LlamaIndex → Qdrant
       │              (ingest.local, xdev-sr)
       │
-      └─ lookup_leetcode() ─► PostgreSQL (vlinux1)
+      ├─ lookup_leetcode() ─► PostgreSQL (vlinux1)
+      └─ conversation history ► PostgreSQL conversations/messages (vlinux1)
+
+GET /conversations, GET /conversations/:id/messages, DELETE /conversations/:id
+      │
+      ▼
+React sidebar — lists past conversations, loads history on click
 
 Background Services (vlinux2, APScheduler)
       ├─ Internship Hunter (06:00 ET daily)
@@ -114,6 +120,10 @@ All `.local` hostnames resolve to `192.168.96.200` (Traefik on the control plane
 ## Database Schema
 
 ### PostgreSQL tables
+
+**conversations** — `id UUID PK, title TEXT, created_at, updated_at`
+
+**messages** — `id UUID PK, conversation_id UUID FK→conversations, role TEXT, content TEXT, created_at` — index on `conversation_id`
 
 **internship_postings**
 ```sql
