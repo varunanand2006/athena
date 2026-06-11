@@ -59,6 +59,24 @@ CREATE TABLE IF NOT EXISTS leetcode_analysis (
     analyzed_at TIMESTAMPTZ NOT NULL
 );
 
+-- Phase 8: Multi-chat
+CREATE TABLE IF NOT EXISTS conversations (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    title      TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID        NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role            TEXT        NOT NULL,
+    content         TEXT        NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+
 -- Phase 5: Internship Hunter
 CREATE TABLE IF NOT EXISTS internship_postings (
     id                    SERIAL PRIMARY KEY,

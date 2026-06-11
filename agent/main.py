@@ -36,6 +36,10 @@ def get_llm(mode: str):
     return ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0)
 
 
+def pg_conn():
+    return psycopg2.connect(_PG_DSN)
+
+
 @tool
 def web_search(query: str) -> str:
     """Search the web for current information using SearXNG."""
@@ -95,7 +99,7 @@ def search_documents(query: str) -> str:
 def lookup_leetcode(query: str) -> str:
     """Look up LeetCode activity from Postgres. Use for any question about solved problems,
     difficulty breakdown, weekly progress, patterns, or what to focus on next."""
-    conn = psycopg2.connect(_PG_DSN)
+    conn = pg_conn()
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -118,7 +122,6 @@ def lookup_leetcode(query: str) -> str:
     if not all_problems:
         return "No LeetCode data in the database yet."
 
-    # Sort by solved_at descending for recency; show last 15
     sorted_problems = sorted(all_problems, key=lambda r: r[2], reverse=True)
     recent = sorted_problems[:15]
 
@@ -148,34 +151,129 @@ SYSTEM_PROMPT = (
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
+
 class ChatRequest(BaseModel):
     message: str
     mode: str = "chat"
+    conversation_id: str | None = None
 
 
 class ChatResponse(BaseModel):
     response: str
+    conversation_id: str
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     try:
+        conn = pg_conn()
+        try:
+            with conn.cursor() as cur:
+                if req.conversation_id is None:
+                    title = req.message[:40]
+                    cur.execute(
+                        "INSERT INTO conversations (title) VALUES (%s) RETURNING id",
+                        (title,),
+                    )
+                    conversation_id = str(cur.fetchone()[0])
+                    history = []
+                else:
+                    conversation_id = req.conversation_id
+                    cur.execute(
+                        "SELECT role, content FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
+                        (conversation_id,),
+                    )
+                    history = [{"role": row[0], "content": row[1]} for row in cur.fetchall()]
+            conn.commit()
+        finally:
+            conn.close()
+
+        messages = history + [{"role": "user", "content": req.message}]
+
         llm = get_llm(req.mode)
         agent = create_react_agent(llm, tools=[web_search, search_documents, lookup_leetcode], prompt=SYSTEM_PROMPT)
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             _executor,
-            lambda: agent.invoke({"messages": [{"role": "user", "content": req.message}]}),
+            lambda: agent.invoke({"messages": messages}),
         )
         last = result["messages"][-1]
-        return ChatResponse(response=last.content)
+        response_text = last.content
+
+        conn = pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
+                    (conversation_id, "user", req.message),
+                )
+                cur.execute(
+                    "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
+                    (conversation_id, "assistant", response_text),
+                )
+                cur.execute(
+                    "UPDATE conversations SET updated_at = now() WHERE id = %s",
+                    (conversation_id,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return ChatResponse(response=response_text, conversation_id=conversation_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/conversations")
+def list_conversations():
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": str(r[0]), "title": r[1], "updated_at": r[2].isoformat()}
+        for r in rows
+    ]
+
+
+@app.get("/conversations/{conversation_id}/messages")
+def get_conversation_messages(conversation_id: str):
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT role, content, created_at FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
+                (conversation_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {"role": r[0], "content": r[1], "created_at": r[2].isoformat()}
+        for r in rows
+    ]
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str):
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM conversations WHERE id = %s", (conversation_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 @app.get("/internships")
 def internships():
-    conn = psycopg2.connect(_PG_DSN)
+    conn = pg_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -208,7 +306,7 @@ def internships():
 
 @app.get("/leetcode")
 def leetcode():
-    conn = psycopg2.connect(_PG_DSN)
+    conn = pg_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
