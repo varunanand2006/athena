@@ -11,7 +11,9 @@ RUN pip install --no-cache-dir \
     "llama-index-readers-file>=0.2" \
     "qdrant-client>=1.9" \
     "python-multipart>=0.0.9" \
-    "httpx>=0.27"
+    "httpx>=0.27" \
+    "psycopg2-binary>=2.9" \
+    "apscheduler>=3.10,<4"
 
 COPY main.py .
 
