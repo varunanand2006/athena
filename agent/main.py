@@ -16,6 +16,7 @@ _executor = ThreadPoolExecutor(max_workers=2)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
 SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://searxng.athena.svc.cluster.local:80")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant.athena.svc.cluster.local:6333")
+INGESTION_URL = os.getenv("INGESTION_URL", "http://ingestion.athena.svc.cluster.local")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -139,11 +140,84 @@ def lookup_leetcode(query: str) -> str:
     return "\n".join(lines)
 
 
+@tool
+def list_documents() -> str:
+    """List every document in the catalog with title, type, added date, and summary.
+    Use this for questions like "what documents do you have access to" or "what's
+    in my library" — i.e. *browsing* the catalog, not searching content."""
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT title, doc_type, added_at, summary FROM documents ORDER BY added_at DESC"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return "No documents in catalog."
+
+    lines = []
+    for title, doc_type, added_at, summary in rows:
+        added = added_at.strftime("%Y-%m-%d") if added_at else ""
+        short = (summary or "").strip().replace("\n", " ")
+        if len(short) > 200:
+            short = short[:200] + "..."
+        lines.append(f"- {title} ({doc_type}, added {added}): {short}")
+    return "\n".join(lines)
+
+
+@tool
+def get_table_of_contents() -> str:
+    """Return the rendered markdown table of contents for the document library.
+    Use this when the user asks to "show the table of contents" or wants the
+    catalog as a formatted view."""
+    with httpx.Client(timeout=10) as client:
+        resp = client.get(f"{INGESTION_URL}/toc")
+        resp.raise_for_status()
+        return resp.text
+
+
+@tool
+def get_document_summary(name: str) -> str:
+    """Return the stored one-paragraph summary for a single document, looked up
+    by partial match against filename or title. Use this for questions like
+    "what's in my resume" or "summarize the project doc"."""
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT title, summary
+                FROM documents
+                WHERE filename ILIKE %s OR title ILIKE %s
+                ORDER BY added_at DESC
+                LIMIT 1
+                """,
+                (f"%{name}%", f"%{name}%"),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return f"No document matching '{name}' was found."
+    title, summary = row
+    return f"{title}: {summary or '(no summary available)'}"
+
+
 SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
-    "You have access to three tools: web_search, search_documents, and lookup_leetcode. "
+    "You have access to these tools: web_search, search_documents, lookup_leetcode, "
+    "list_documents, get_table_of_contents, and get_document_summary. "
     "For questions about the user's own background, resume, skills, projects, or experience, "
-    "you MUST call search_documents before answering. "
+    "you MUST call search_documents to semantically search document contents before answering. "
+    "For questions about which documents exist or what's in the library — e.g. \"what documents "
+    "do you have access to\" or \"show me the table of contents\" — use list_documents or "
+    "get_table_of_contents to *browse* the catalog (these do not search content). "
+    "For \"what's in my <document name>\" or \"summarize my <document name>\", use "
+    "get_document_summary with the document's name or filename. "
     "For questions about LeetCode progress, solved problems, difficulty breakdown, "
     "patterns, or what to study next, you MUST call lookup_leetcode before answering. "
     "For questions about current events, job listings, prices, or recent news, "
@@ -191,7 +265,18 @@ async def chat(req: ChatRequest):
         messages = history + [{"role": "user", "content": req.message}]
 
         llm = get_llm(req.mode)
-        agent = create_react_agent(llm, tools=[web_search, search_documents, lookup_leetcode], prompt=SYSTEM_PROMPT)
+        agent = create_react_agent(
+            llm,
+            tools=[
+                web_search,
+                search_documents,
+                lookup_leetcode,
+                list_documents,
+                get_table_of_contents,
+                get_document_summary,
+            ],
+            prompt=SYSTEM_PROMPT,
+        )
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             _executor,
@@ -331,6 +416,36 @@ def leetcode():
         "hard": hard,
         "last_solved_date": last,
     }
+
+
+@app.get("/documents")
+def list_documents_endpoint():
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, filename, title, doc_type, summary, chunk_count, size_bytes, added_at
+                FROM documents
+                ORDER BY added_at DESC
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "id": str(r[0]),
+            "filename": r[1],
+            "title": r[2],
+            "doc_type": r[3],
+            "summary": r[4] or "",
+            "chunk_count": r[5],
+            "size_bytes": r[6],
+            "added_at": r[7].isoformat() if r[7] else None,
+        }
+        for r in rows
+    ]
 
 
 @app.get("/healthz")
