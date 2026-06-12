@@ -1,10 +1,15 @@
+import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 import psycopg2
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
 from pydantic import BaseModel
@@ -24,8 +29,13 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant.athena.svc.cluster.local:633
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
 DOCS_DIR = Path(os.getenv("INGESTION_DOCS_DIR", "/data/documents"))
+TOC_FILENAME = "_TABLE_OF_CONTENTS.md"
+WATCH_INTERVAL_MINUTES = int(os.getenv("INGESTION_WATCH_INTERVAL_MINUTES", "5"))
 COLLECTION = "documents"
 EMBED_DIM = 768
+
+log = logging.getLogger("ingestion")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 _PG_DSN = (
     f"postgresql://{os.getenv('POSTGRES_USER', 'athena')}"
@@ -39,7 +49,6 @@ def pg_conn():
     return psycopg2.connect(_PG_DSN)
 
 
-app = FastAPI(title="Athena Ingestion")
 qdrant = QdrantClient(url=QDRANT_URL)
 
 
@@ -52,10 +61,29 @@ def _ensure_collection() -> None:
         )
 
 
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     _ensure_collection()
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.add_job(
+        _scan_documents_folder,
+        "interval",
+        minutes=WATCH_INTERVAL_MINUTES,
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    log.info("folder watcher started — scanning %s every %s min", DOCS_DIR, WATCH_INTERVAL_MINUTES)
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="Athena Ingestion", lifespan=lifespan)
 
 
 def _embed(text: str) -> list[float]:
@@ -201,12 +229,56 @@ def _ingest_path(file_path: Path, original_filename: str) -> dict:
     finally:
         conn.close()
 
+    try:
+        _regenerate_toc()
+    except Exception:
+        pass
+
     return {
         "document_id": document_id,
         "filename": original_filename,
         "chunks": chunk_count,
         "summary": summary,
     }
+
+
+def _regenerate_toc() -> None:
+    """Rebuild the human-readable markdown table of contents on the PVC.
+
+    Writes atomically via a .tmp + os.replace so the folder watcher never
+    sees a half-written file.
+    """
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT title, doc_type, added_at, summary FROM documents ORDER BY added_at DESC"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "# Athena Document Library",
+        f"_Last updated: {timestamp}_",
+        "",
+        f"{len(rows)} documents stored.",
+        "",
+        "| Title | Type | Added | Summary |",
+        "|-------|------|-------|---------|",
+    ]
+    for title, doc_type, added_at, summary in rows:
+        added = added_at.strftime("%Y-%m-%d") if added_at else ""
+        clean_summary = (summary or "").replace("|", "\\|").replace("\n", " ").strip()
+        clean_title = (title or "").replace("|", "\\|")
+        lines.append(f"| {clean_title} | {doc_type} | {added} | {clean_summary} |")
+
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    final = DOCS_DIR / TOC_FILENAME
+    tmp = DOCS_DIR / f"{TOC_FILENAME}.tmp"
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, final)
 
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -218,6 +290,48 @@ async def ingest(file: UploadFile = File(...)) -> IngestResponse:
     dest.write_bytes(await file.read())
     result = _ingest_path(dest, file.filename)
     return IngestResponse(**result)
+
+
+def _scan_documents_folder() -> None:
+    """Find files on the PVC that aren't in the catalog and ingest them.
+
+    Runs every WATCH_INTERVAL_MINUTES minutes via the lifespan scheduler.
+    Skips the TOC file, anything starting with `_`, and `.tmp` partials.
+    Logs and continues on per-file failures so one bad file can't stall
+    the whole scan.
+    """
+    if not DOCS_DIR.exists():
+        return
+
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT filename FROM documents")
+            known = {row[0] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    for entry in DOCS_DIR.iterdir():
+        if not entry.is_file():
+            continue
+        name = entry.name
+        if name.startswith("_") or name.endswith(".tmp") or name == TOC_FILENAME:
+            continue
+        if name in known:
+            continue
+        try:
+            log.info("auto-ingesting %s", name)
+            _ingest_path(entry, name)
+        except Exception:
+            log.exception("auto-ingest failed for %s", name)
+
+
+@app.get("/toc", response_class=PlainTextResponse)
+def toc() -> str:
+    path = DOCS_DIR / TOC_FILENAME
+    if not path.exists():
+        _regenerate_toc()
+    return path.read_text(encoding="utf-8")
 
 
 @app.get("/healthz")
