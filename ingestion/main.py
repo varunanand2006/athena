@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -128,12 +129,12 @@ class IngestResponse(BaseModel):
     summary: str
 
 
-def _ingest_path(file_path: Path, original_filename: str) -> dict:
-    """Catalog and embed a file already present on disk at file_path.
+def _insert_catalog_row(file_path: Path, original_filename: str) -> str:
+    """Synchronous setup: handle re-ingest cleanup and insert the catalog row.
 
-    Shared by POST /ingest (after writing the upload to the PVC) and the
-    folder watcher. On re-ingest of an existing filename, the old catalog
-    row and its Qdrant points are dropped first.
+    Returns the new document_id. Fast — only DB + Qdrant filter-delete, no
+    embedding or summarization. Safe to call from request handlers without
+    blocking the client.
     """
     doc_type = file_path.suffix.lstrip(".").lower() or "bin"
     title = file_path.stem
@@ -173,17 +174,28 @@ def _ingest_path(file_path: Path, original_filename: str) -> dict:
             conn.commit()
     finally:
         conn.close()
+    return document_id
 
-    docs = SimpleDirectoryReader(input_files=[str(file_path)]).load_data()
+
+def _embed_and_summarize(document_id: str, file_path: Path, original_filename: str) -> None:
+    """Heavy work: chunk, embed, summarize, update catalog, regenerate TOC.
+
+    Runs in a background thread for POST /ingest so big files don't block
+    the client past the proxy timeout. The watcher calls it inline since
+    it already runs in the APScheduler thread.
+
+    Logs and recovers on failure rather than raising. If the catalog row
+    is left with chunk_count=0 and no summary, the row stays as evidence
+    of the failure and the user can delete + re-upload.
+    """
+    try:
+        docs = SimpleDirectoryReader(input_files=[str(file_path)]).load_data()
+    except Exception:
+        log.exception("text extraction failed for %s", original_filename)
+        return
     if not docs:
-        conn = pg_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM documents WHERE id = %s", (document_id,))
-                conn.commit()
-        finally:
-            conn.close()
-        raise HTTPException(status_code=422, detail="Could not extract text from file.")
+        log.warning("text extraction produced no content for %s", original_filename)
+        return
 
     splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
     nodes = splitter.get_nodes_from_documents(docs)
@@ -195,7 +207,11 @@ def _ingest_path(file_path: Path, original_filename: str) -> dict:
         if not text:
             continue
         full_text_parts.append(text)
-        vector = _embed(text)
+        try:
+            vector = _embed(text)
+        except Exception:
+            log.exception("embedding call failed for %s chunk", original_filename)
+            return
         points.append(PointStruct(
             id=str(uuid.uuid4()),
             vector=vector,
@@ -207,7 +223,11 @@ def _ingest_path(file_path: Path, original_filename: str) -> dict:
         ))
 
     if points:
-        qdrant.upsert(collection_name=COLLECTION, points=points)
+        try:
+            qdrant.upsert(collection_name=COLLECTION, points=points)
+        except Exception:
+            log.exception("qdrant upsert failed for %s", original_filename)
+            return
 
     chunk_count = len(points)
     full_text = "\n\n".join(full_text_parts)
@@ -216,30 +236,30 @@ def _ingest_path(file_path: Path, original_filename: str) -> dict:
         try:
             summary = _generate_summary(full_text)
         except Exception:
+            log.exception("summary generation failed for %s", original_filename)
             summary = ""
 
-    conn = pg_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE documents SET summary = %s, chunk_count = %s WHERE id = %s",
-                (summary, chunk_count, document_id),
-            )
-            conn.commit()
-    finally:
-        conn.close()
+        conn = pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE documents SET summary = %s, chunk_count = %s WHERE id = %s",
+                    (summary, chunk_count, document_id),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("catalog update failed for %s", original_filename)
+        return
 
     try:
         _regenerate_toc()
     except Exception:
-        pass
+        log.exception("toc regeneration failed after ingest of %s", original_filename)
 
-    return {
-        "document_id": document_id,
-        "filename": original_filename,
-        "chunks": chunk_count,
-        "summary": summary,
-    }
+    log.info("ingest complete for %s (%s chunks)", original_filename, chunk_count)
 
 
 def _regenerate_toc() -> None:
@@ -283,13 +303,32 @@ def _regenerate_toc() -> None:
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest(file: UploadFile = File(...)) -> IngestResponse:
+    """Save the upload and kick off background processing.
+
+    Returns immediately after the file is on the PVC and a catalog row is
+    inserted with chunk_count=0 and no summary. Embedding + summary run in
+    a daemon thread so large files don't blow past the proxy timeout.
+    The frontend polls /documents and the row fills in when processing
+    completes.
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="Uploaded file is missing a filename.")
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     dest = DOCS_DIR / file.filename
     dest.write_bytes(await file.read())
-    result = _ingest_path(dest, file.filename)
-    return IngestResponse(**result)
+    document_id = _insert_catalog_row(dest, file.filename)
+    threading.Thread(
+        target=_embed_and_summarize,
+        args=(document_id, dest, file.filename),
+        daemon=True,
+        name=f"ingest-{file.filename}",
+    ).start()
+    return IngestResponse(
+        filename=file.filename,
+        chunks=0,
+        document_id=document_id,
+        summary="",
+    )
 
 
 def _scan_documents_folder() -> None:
@@ -321,7 +360,8 @@ def _scan_documents_folder() -> None:
             continue
         try:
             log.info("auto-ingesting %s", name)
-            _ingest_path(entry, name)
+            document_id = _insert_catalog_row(entry, name)
+            _embed_and_summarize(document_id, entry, name)
         except Exception:
             log.exception("auto-ingest failed for %s", name)
 
@@ -332,6 +372,51 @@ def toc() -> str:
     if not path.exists():
         _regenerate_toc()
     return path.read_text(encoding="utf-8")
+
+
+@app.delete("/ingest/documents/{document_id}")
+def delete_document(document_id: str) -> dict:
+    """Remove a document from the PVC, the Qdrant collection, and the catalog.
+
+    The file must be removed from the PVC too — leaving it in place would
+    cause the folder watcher to re-ingest it on the next scan.
+    """
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT file_path FROM documents WHERE id = %s", (document_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="document not found")
+            file_path = row[0]
+
+            qdrant.delete(
+                collection_name=COLLECTION,
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(
+                            key="document_id",
+                            match=MatchValue(value=document_id),
+                        )]
+                    )
+                ),
+            )
+            cur.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+            conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        Path(file_path).unlink(missing_ok=True)
+    except Exception:
+        log.exception("failed to delete file %s", file_path)
+
+    try:
+        _regenerate_toc()
+    except Exception:
+        pass
+
+    return {"deleted": document_id}
 
 
 @app.get("/healthz")

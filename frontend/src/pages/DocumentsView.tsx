@@ -30,6 +30,7 @@ export default function DocumentsView() {
   const [hovering, setHovering] = useState(false)
   const [uploading, setUploading] = useState<string[]>([])
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchDocs = useCallback(async () => {
@@ -48,6 +49,14 @@ export default function DocumentsView() {
     fetchDocs()
   }, [fetchDocs])
 
+  // Poll while any document is still being processed (chunk_count = 0)
+  useEffect(() => {
+    const stillProcessing = docs.some((d) => d.chunk_count === 0)
+    if (!stillProcessing) return
+    const id = setInterval(fetchDocs, 4000)
+    return () => clearInterval(id)
+  }, [docs, fetchDocs])
+
   const uploadFiles = useCallback(
     async (files: FileList | File[]) => {
       setUploadError(null)
@@ -59,9 +68,11 @@ export default function DocumentsView() {
           const fd = new FormData()
           fd.append('file', file)
           try {
-            await axios.post('/ingest', fd, { timeout: 180_000 })
+            // /ingest returns fast — server kicks embedding/summary into a
+            // background thread. Polling picks up chunk_count/summary later.
+            await axios.post('/ingest', fd, { timeout: 60_000 })
           } catch (e) {
-            setUploadError(`Failed to ingest ${file.name}`)
+            setUploadError(`Failed to start ingest for ${file.name}`)
           } finally {
             setUploading((prev) => prev.filter((n) => n !== file.name))
           }
@@ -102,6 +113,24 @@ export default function DocumentsView() {
       e.target.value = ''
     },
     [uploadFiles]
+  )
+
+  const onDelete = useCallback(
+    async (doc: Document) => {
+      if (!window.confirm(`Delete "${doc.title}"? This removes the file, catalog row, and search index.`)) {
+        return
+      }
+      setDeletingId(doc.id)
+      try {
+        await axios.delete(`/ingest/documents/${doc.id}`, { timeout: 30_000 })
+        await fetchDocs()
+      } catch {
+        setUploadError(`Failed to delete ${doc.title}`)
+      } finally {
+        setDeletingId(null)
+      }
+    },
+    [fetchDocs]
   )
 
   return (
@@ -213,6 +242,7 @@ export default function DocumentsView() {
                   <th className="text-left px-5 py-2 font-medium text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
                     Summary
                   </th>
+                  <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
@@ -232,7 +262,26 @@ export default function DocumentsView() {
                       {formatBytes(d.size_bytes)}
                     </td>
                     <td className="px-5 py-3 align-top text-xs" style={{ color: 'var(--text)' }}>
-                      {d.summary || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                      {d.chunk_count === 0 ? (
+                        <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
+                          <Spinner />
+                          Processing…
+                        </span>
+                      ) : (
+                        d.summary || <span style={{ color: 'var(--text-muted)' }}>—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 align-top text-right">
+                      <button
+                        type="button"
+                        onClick={() => onDelete(d)}
+                        disabled={deletingId === d.id}
+                        title="Delete document"
+                        className="p-1.5 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                        style={{ color: '#DC2626' }}
+                      >
+                        {deletingId === d.id ? <Spinner /> : <IconTrash />}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -242,6 +291,18 @@ export default function DocumentsView() {
         </div>
       </div>
     </div>
+  )
+}
+
+function IconTrash() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
   )
 }
 
