@@ -14,8 +14,12 @@ spec:
         app: ingestion
     spec:
       nodeSelector:
-        workload: ai
+        kubernetes.io/hostname: vlinux2
       enableServiceLinks: false
+      volumes:
+        - name: documents
+          persistentVolumeClaim:
+            claimName: ingestion-documents
       containers:
         - name: ingestion
           image: athena-ingestion:latest
@@ -23,6 +27,9 @@ spec:
           ports:
             - containerPort: 8000
               name: http
+          volumeMounts:
+            - name: documents
+              mountPath: /data/documents
           env:
             - name: OLLAMA_BASE_URL
               value: "http://ollama.athena.svc.cluster.local:11434"
@@ -30,6 +37,27 @@ spec:
               value: "http://qdrant.athena.svc.cluster.local:6333"
             - name: EMBED_MODEL
               value: "nomic-embed-text"
+            - name: OLLAMA_MODEL
+              value: "gemma4:e2b"
+            - name: INGESTION_DOCS_DIR
+              value: "/data/documents"
+            - name: POSTGRES_HOST
+              value: "postgres.athena.svc.cluster.local"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
           resources:
             requests:
               cpu: 250m
