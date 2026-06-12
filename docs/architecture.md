@@ -10,8 +10,8 @@ Athena is a self-hosted AI assistant running on a bare-metal k3s cluster. It act
 | Node | IP | RAM | Role |
 |------|----|-----|------|
 | vlinux1 | 192.168.96.200 | 8GB | k3s control plane, PostgreSQL, Traefik ingress |
-| vlinux2 | 192.168.96.202 | 16GB | Frontend, internship hunter, LeetCode poller |
-| xdev-sr | 192.168.96.201 | 16GB | Ollama, Qdrant, SearXNG, Agent, Ingestion |
+| vlinux2 | 192.168.96.202 | 16GB | Frontend, internship hunter, LeetCode poller, Ingestion (+ document PVC) |
+| xdev-sr | 192.168.96.201 | 16GB | Ollama, Qdrant, SearXNG, Agent |
 | varunlaptop | 192.168.96.13 | — | Personal laptop, not a cluster node |
 
 All inference is CPU-only. No GPUs.
@@ -30,7 +30,8 @@ All inference is CPU-only. No GPUs.
 | Vector store | Qdrant v1.13.6 | ✅ Running | Semantic search over ingested documents |
 | Relational DB | PostgreSQL 16 | ✅ Running | Internship postings, LeetCode data |
 | Search | SearXNG | ✅ Running | Web search tool for the agent |
-| Ingestion | LlamaIndex + FastAPI | ✅ Running | Document upload, chunking, embedding pipeline |
+| Ingestion | LlamaIndex + FastAPI + APScheduler | ✅ Running | Document upload, persistent PVC store, chunking, embedding, summarization, folder watcher, catalog (Postgres) + TOC |
+| Document PVC | k3s local-path (10Gi, vlinux2) | ✅ Running | Source-of-truth file store at `/data/documents`; survives pod restarts |
 | Internship hunter | APScheduler (Python) | ✅ Running | Daily GitHub README scrape → LLM score → Postgres |
 | LeetCode poller | APScheduler (Python) | ✅ Running | Daily GraphQL sync, Ollama analysis queue |
 | Frontend | React + Vite + nginx | ✅ Running | Chat UI, internship dashboard, LeetCode stats |
@@ -47,28 +48,64 @@ User (browser)
       │
       ▼
 React Frontend — athena.local (nginx, vlinux2)
-      │  proxies /chat, /internships, /leetcode
+      │  proxies /chat /conversations /internships /leetcode /healthz /documents → agent
+      │  proxies /ingest /toc                                                    → ingestion
       ▼
 LangGraph Agent — agent.local (xdev-sr)
       │
       ├─ mode=chat ──────► OpenAI GPT-4o-mini (cloud)
       ├─ mode=background ► Ollama gemma4:e2b (xdev-sr)
       │
-      ├─ web_search() ───► SearXNG — searxng.local (xdev-sr)
-      ├─ search_docs() ──► Qdrant — qdrant.local (xdev-sr)
-      │                        ▲
-      │                        │ embed via nomic-embed-text
-      │                        │
-      │              POST /ingest → LlamaIndex → Qdrant
-      │              (ingest.local, xdev-sr)
+      ├─ web_search() ───────────────► SearXNG — searxng.local (xdev-sr)
+      ├─ search_documents() ─────────► Qdrant — qdrant.local (xdev-sr)
+      │                                    semantic chunk search
+      ├─ list_documents() ───────────► PostgreSQL `documents` (vlinux1)
+      ├─ get_table_of_contents() ────► Ingestion GET /toc (vlinux2)
+      ├─ get_document_summary(name) ─► PostgreSQL `documents` (vlinux1)
       │
-      ├─ lookup_leetcode() ─► PostgreSQL (vlinux1)
-      └─ conversation history ► PostgreSQL conversations/messages (vlinux1)
+      ├─ lookup_leetcode() ──────────► PostgreSQL (vlinux1)
+      └─ conversation history ───────► PostgreSQL conversations/messages (vlinux1)
 
 GET /conversations, GET /conversations/:id/messages, DELETE /conversations/:id
+GET /documents (catalog JSON)
       │
       ▼
-React sidebar — lists past conversations, loads history on click
+React frontend — sidebar (conversations), /dashboard, /documents
+
+Document storage data flow
+==========================
+
+Frontend upload (POST /ingest)            Folder drop (scp file → /data/documents)
+        │                                                │
+        ▼                                                │
+Ingestion — ingest.local (vlinux2)                       │
+        │                                                │
+        │   write file → /data/documents/<name>          │   BackgroundScheduler
+        │                                                │   scans every 5 min
+        │   _insert_catalog_row()                        │   _insert_catalog_row()
+        │     re-ingest? qdrant filter-delete            │   _embed_and_summarize()
+        │     INSERT documents row → document_id         │     (sync — in scheduler thread)
+        │                                                │
+        │   threading.Thread(_embed_and_summarize) ──────┤
+        │                                                │
+        │   return IngestResponse (fast)                 ▼
+        ▼                                          Same _embed_and_summarize path
+   Frontend polls GET /documents every 4s              │
+   until chunk_count > 0 (then summary renders)        ▼
+
+_embed_and_summarize:
+  SimpleDirectoryReader → SentenceSplitter (512/64)
+  → for each chunk: Ollama nomic-embed-text → Qdrant upsert
+    (payload includes document_id for filter-delete on re-ingest/delete)
+  → first 2000 chars → Ollama gemma4:e2b /api/chat (think:false, num_ctx 2048, num_predict 150)
+  → UPDATE documents SET chunk_count, summary
+  → _regenerate_toc() → write atomic /data/documents/_TABLE_OF_CONTENTS.md
+
+Document delete (DELETE /ingest/documents/{id})
+  → qdrant filter-delete by document_id
+  → DELETE FROM documents
+  → Path(file_path).unlink()  (must — watcher would re-ingest otherwise)
+  → _regenerate_toc()
 
 Background Services (vlinux2, APScheduler)
       ├─ Internship Hunter (06:00 ET daily)
@@ -92,7 +129,7 @@ Background Services (vlinux2, APScheduler)
 |----------|---------|------|
 | `athena.local` | React frontend | vlinux2 |
 | `agent.local` | LangGraph agent | xdev-sr |
-| `ingest.local` | LlamaIndex ingestion | xdev-sr |
+| `ingest.local` | LlamaIndex ingestion | vlinux2 |
 | `qdrant.local` | Qdrant HTTP API | xdev-sr |
 | `ollama.local` | Ollama API | xdev-sr |
 | `searxng.local` | SearXNG search API | xdev-sr |
@@ -110,7 +147,7 @@ All `.local` hostnames resolve to `192.168.96.200` (Traefik on the control plane
 | Qdrant | xdev-sr | `workload=ai` | Vector ops benefit from dedicated resources |
 | SearXNG | xdev-sr | `workload=ai` | Co-located with agent |
 | Agent | xdev-sr | `workload=ai` | Direct access to Ollama and Qdrant |
-| Ingestion | xdev-sr | `workload=ai` | Direct access to Ollama and Qdrant |
+| Ingestion | vlinux2 | `kubernetes.io/hostname: vlinux2` | Pinned to the node that holds the documents PVC (k3s local-path is node-local) |
 | Frontend | vlinux2 | `kubernetes.io/hostname: vlinux2` | Lightweight, offloads xdev-sr |
 | Internship hunter | vlinux2 | `kubernetes.io/hostname: vlinux2` | Lightweight poller, calls agent and SearXNG remotely |
 | LeetCode poller | vlinux2 | `kubernetes.io/hostname: vlinux2` | Lightweight poller |
@@ -139,3 +176,21 @@ apply_link TEXT, found_date DATE
 **leetcode_analysis** — `problem_slug, analysis_text, analyzed_at`
 
 **leetcode_queue** — `problem_slug PK, submitted_at, queued_at`
+
+**documents** — catalog rows for ingested files. Each row corresponds to one file on the PVC; `id` is stamped into every related Qdrant point's payload as `document_id`.
+```sql
+id          UUID PK DEFAULT gen_random_uuid(),
+filename    TEXT NOT NULL UNIQUE,   -- original upload filename
+title       TEXT NOT NULL,          -- filename stem
+doc_type    TEXT NOT NULL,          -- pdf, txt, md, docx, ...
+file_path   TEXT NOT NULL,          -- absolute path on /data/documents PVC
+summary     TEXT,                   -- gemma4:e2b one-paragraph summary
+chunk_count INTEGER NOT NULL DEFAULT 0,  -- 0 while still processing
+size_bytes  INTEGER NOT NULL DEFAULT 0,
+added_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+Index on `(added_at DESC)`.
+
+### Qdrant collections
+
+**documents** — vector store for chunked document text. Each point's payload carries `text`, `filename`, and `document_id` (the UUID of the catalog row). On re-ingest or row deletion, all points are removed by filter-match on `document_id`. Distinct from the Postgres table of the same name — they store fundamentally different things (chunks vs. catalog metadata).
