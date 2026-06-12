@@ -93,3 +93,22 @@ CREATE TABLE IF NOT EXISTS internship_postings (
     UNIQUE (company, role, location)
 );
 
+-- Phase 9: Document Storage & Catalog
+-- Source-of-truth catalog for uploaded documents. The Qdrant `documents`
+-- collection holds vector chunks; this Postgres table holds one row per
+-- ingested file, with `id` stamped into each chunk's Qdrant payload as
+-- `document_id` so chunks can be deleted by document on re-ingest.
+CREATE TABLE IF NOT EXISTS documents (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    filename    TEXT        NOT NULL UNIQUE,
+    title       TEXT        NOT NULL,
+    doc_type    TEXT        NOT NULL,
+    file_path   TEXT        NOT NULL,
+    summary     TEXT,
+    chunk_count INTEGER     NOT NULL DEFAULT 0,
+    size_bytes  INTEGER     NOT NULL DEFAULT 0,
+    added_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_added_at ON documents (added_at DESC);
+
