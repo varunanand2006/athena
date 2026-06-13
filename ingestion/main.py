@@ -50,6 +50,35 @@ def pg_conn():
     return psycopg2.connect(_PG_DSN)
 
 
+def _mark_failed(document_id: str, reason: str) -> None:
+    """Flip a catalog row to status='failed' and log why.
+
+    Best-effort: if the UPDATE itself raises (e.g. Postgres unreachable), we
+    log and move on. The reaper job will eventually catch the row anyway.
+    """
+    log.error("marking document %s failed: %s", document_id, reason)
+    try:
+        conn = pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE documents SET status='failed' WHERE id=%s", (document_id,))
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("failed to mark document %s as failed", document_id)
+
+
+def _mark_complete(document_id: str) -> None:
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE documents SET status='complete' WHERE id=%s", (document_id,))
+            conn.commit()
+    finally:
+        conn.close()
+
+
 qdrant = QdrantClient(url=QDRANT_URL)
 
 
@@ -60,6 +89,37 @@ def _ensure_collection() -> None:
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
         )
+
+
+def _reap_stuck_documents() -> None:
+    """Flip any document stuck in 'processing' for too long to 'failed'.
+
+    Catches rows orphaned by a pod restart mid-ingest, where the daemon
+    thread that would have called _mark_failed no longer exists. Without
+    this, a single OOM-kill during embedding leaves a row spinning in
+    the UI forever.
+    """
+    try:
+        conn = pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE documents
+                       SET status = 'failed'
+                     WHERE status = 'processing'
+                       AND added_at < now() - interval '30 minutes'
+                     RETURNING id, filename
+                    """
+                )
+                reaped = cur.fetchall()
+                conn.commit()
+            for doc_id, filename in reaped:
+                log.warning("reaped stuck document id=%s filename=%s", doc_id, filename)
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("reaper job failed")
 
 
 @asynccontextmanager
@@ -76,8 +136,17 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        _reap_stuck_documents,
+        "interval",
+        minutes=10,
+        max_instances=1,
+        coalesce=True,
+        id="reap_stuck_documents",
+    )
     scheduler.start()
     log.info("folder watcher started — scanning %s every %s min", DOCS_DIR, WATCH_INTERVAL_MINUTES)
+    log.info("reaper started — marking processing>30min rows as failed every 10 min")
     try:
         yield
     finally:
@@ -184,82 +253,95 @@ def _embed_and_summarize(document_id: str, file_path: Path, original_filename: s
     the client past the proxy timeout. The watcher calls it inline since
     it already runs in the APScheduler thread.
 
-    Logs and recovers on failure rather than raising. If the catalog row
-    is left with chunk_count=0 and no summary, the row stays as evidence
-    of the failure and the user can delete + re-upload.
+    Transitions the catalog row to status='complete' on success or
+    status='failed' on any error. The outer try/except is the safety net
+    for uncaught crashes (e.g. SentenceSplitter blowing up) that the
+    inner per-step except blocks don't cover — without it a crashed
+    daemon thread would leave the row stuck at 'processing' forever.
     """
     try:
-        docs = SimpleDirectoryReader(input_files=[str(file_path)]).load_data()
-    except Exception:
-        log.exception("text extraction failed for %s", original_filename)
-        return
-    if not docs:
-        log.warning("text extraction produced no content for %s", original_filename)
-        return
-
-    splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
-    nodes = splitter.get_nodes_from_documents(docs)
-
-    points = []
-    full_text_parts = []
-    for node in nodes:
-        text = node.get_content().strip()
-        if not text:
-            continue
-        full_text_parts.append(text)
         try:
-            vector = _embed(text)
+            docs = SimpleDirectoryReader(input_files=[str(file_path)]).load_data()
         except Exception:
-            log.exception("embedding call failed for %s chunk", original_filename)
+            log.exception("text extraction failed for %s", original_filename)
+            _mark_failed(document_id, "text extraction failed")
             return
-        points.append(PointStruct(
-            id=str(uuid.uuid4()),
-            vector=vector,
-            payload={
-                "text": text,
-                "filename": original_filename,
-                "document_id": document_id,
-            },
-        ))
-
-    if points:
-        try:
-            qdrant.upsert(collection_name=COLLECTION, points=points)
-        except Exception:
-            log.exception("qdrant upsert failed for %s", original_filename)
+        if not docs:
+            log.warning("text extraction produced no content for %s", original_filename)
+            _mark_failed(document_id, "text extraction produced no content")
             return
 
-    chunk_count = len(points)
-    full_text = "\n\n".join(full_text_parts)
-    summary = ""
-    if full_text:
+        splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
+        nodes = splitter.get_nodes_from_documents(docs)
+
+        points = []
+        full_text_parts = []
+        for node in nodes:
+            text = node.get_content().strip()
+            if not text:
+                continue
+            full_text_parts.append(text)
+            try:
+                vector = _embed(text)
+            except Exception:
+                log.exception("embedding call failed for %s chunk", original_filename)
+                _mark_failed(document_id, "embedding call failed")
+                return
+            points.append(PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={
+                    "text": text,
+                    "filename": original_filename,
+                    "document_id": document_id,
+                },
+            ))
+
+        if points:
+            try:
+                qdrant.upsert(collection_name=COLLECTION, points=points)
+            except Exception:
+                log.exception("qdrant upsert failed for %s", original_filename)
+                _mark_failed(document_id, "qdrant upsert failed")
+                return
+
+        chunk_count = len(points)
+        full_text = "\n\n".join(full_text_parts)
+        summary = ""
+        if full_text:
+            try:
+                summary = _generate_summary(full_text)
+            except Exception:
+                log.exception("summary generation failed for %s", original_filename)
+                summary = ""
+
         try:
-            summary = _generate_summary(full_text)
+            conn = pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE documents SET summary = %s, chunk_count = %s WHERE id = %s",
+                        (summary, chunk_count, document_id),
+                    )
+                    conn.commit()
+            finally:
+                conn.close()
         except Exception:
-            log.exception("summary generation failed for %s", original_filename)
-            summary = ""
+            log.exception("catalog update failed for %s", original_filename)
+            _mark_failed(document_id, "catalog update failed")
+            return
 
-    try:
-        conn = pg_conn()
+        _mark_complete(document_id)
+
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE documents SET summary = %s, chunk_count = %s WHERE id = %s",
-                    (summary, chunk_count, document_id),
-                )
-                conn.commit()
-        finally:
-            conn.close()
-    except Exception:
-        log.exception("catalog update failed for %s", original_filename)
-        return
+            _regenerate_toc()
+        except Exception:
+            log.exception("toc regeneration failed after ingest of %s", original_filename)
 
-    try:
-        _regenerate_toc()
-    except Exception:
-        log.exception("toc regeneration failed after ingest of %s", original_filename)
-
-    log.info("ingest complete for %s (%s chunks)", original_filename, chunk_count)
+        log.info("ingest complete for %s (%s chunks)", original_filename, chunk_count)
+    except Exception as e:
+        log.exception("unexpected error during ingest of %s", original_filename)
+        _mark_failed(document_id, f"unexpected error: {e}")
 
 
 def _regenerate_toc() -> None:
