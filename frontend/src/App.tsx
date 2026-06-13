@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import ChatView from './pages/ChatView'
 import DashboardView from './pages/DashboardView'
 import DocumentsView from './pages/DocumentsView'
+import SystemView from './pages/SystemView'
 
 export interface Message {
   id: string
@@ -59,6 +60,7 @@ export default function App() {
             />
             <Route path="/dashboard" element={<DashboardView messages={messages} />} />
             <Route path="/documents" element={<DocumentsView />} />
+            <Route path="/system" element={<SystemView />} />
           </Routes>
         </main>
       </div>

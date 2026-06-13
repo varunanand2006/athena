@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import axios from 'axios'
 import type { Message } from '../App'
+import { relativeTime } from '../utils/time'
 
 interface Conversation {
   id: string
@@ -14,18 +15,6 @@ interface Props {
   onConversationSelect: (id: string, messages: Message[]) => void
   activeConversationId: string | null
   refreshRef: React.MutableRefObject<(() => void) | null>
-}
-
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime()
-  const minutes = Math.floor(diff / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days === 1) return 'yesterday'
-  return `${days}d ago`
 }
 
 function uid() {
@@ -175,6 +164,18 @@ export default function Sidebar({
           <IconDocuments />
           Documents
         </NavLink>
+        <NavLink
+          to="/system"
+          className={({ isActive }) =>
+            `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              isActive ? 'text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/5'
+            }`
+          }
+          style={({ isActive }) => (isActive ? { background: 'var(--accent)' } : {})}
+        >
+          <IconSystem />
+          System
+        </NavLink>
       </nav>
 
       {/* Conversation list */}
@@ -273,6 +274,14 @@ function IconDocuments() {
       <polyline points="14 2 14 8 20 8" />
       <line x1="8" y1="13" x2="16" y2="13" />
       <line x1="8" y1="17" x2="16" y2="17" />
+    </svg>
+  )
+}
+
+function IconSystem() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
     </svg>
   )
 }
