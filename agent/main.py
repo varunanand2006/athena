@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -452,3 +453,81 @@ def list_documents_endpoint():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+# Reuse the env-configured URLs above so a deployment override (e.g. swapping
+# Ollama models in dev) is picked up here without a second source of truth.
+SYSTEM_HEALTH_CHECKS = [
+    ("ingestion", f"{INGESTION_URL}/healthz"),
+    ("ollama",    f"{OLLAMA_BASE_URL}/api/tags"),
+    ("qdrant",    f"{QDRANT_URL}/healthz"),
+    ("searxng",   f"{SEARXNG_BASE_URL}/healthz"),
+]
+
+
+async def _ping_service(client: httpx.AsyncClient, name: str, url: str) -> dict:
+    """Treat any non-5xx as reachable. Some services (e.g. SearXNG) may
+    return 404 on /healthz but are clearly up — that's still a successful
+    network round-trip and a green dot."""
+    t0 = time.perf_counter()
+    try:
+        resp = await client.get(url, timeout=2.0)
+        reachable = resp.status_code < 500
+        return {
+            "name": name,
+            "reachable": reachable,
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
+    except Exception:
+        return {"name": name, "reachable": False, "latency_ms": None}
+
+
+@app.get("/system/health")
+async def system_health():
+    """Aggregated reachability + data snapshot for the /system view.
+
+    Self-check is hardcoded reachable=true: if this endpoint responds at
+    all, the agent is up. The remaining checks fan out in parallel with
+    a 2s per-check timeout so one slow dep can't stall the whole view.
+    """
+    async with httpx.AsyncClient() as client:
+        pinged = await asyncio.gather(
+            *[_ping_service(client, name, url) for name, url in SYSTEM_HEALTH_CHECKS]
+        )
+    services = [{"name": "agent", "reachable": True, "latency_ms": 0}, *pinged]
+
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, COUNT(*) FROM documents GROUP BY status")
+            docs_by_status = {row[0]: row[1] for row in cur.fetchall()}
+            cur.execute("SELECT COUNT(*) FROM documents")
+            total_docs = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM internship_postings")
+            total_internships = cur.fetchone()[0]
+            cur.execute("SELECT MAX(found_date) FROM internship_postings")
+            last_internship = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM leetcode_problems")
+            total_leetcode = cur.fetchone()[0]
+            cur.execute("SELECT MAX(solved_at) FROM leetcode_problems")
+            last_leetcode = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    return {
+        "services": services,
+        "data": {
+            "documents": {
+                "total": total_docs,
+                "by_status": docs_by_status,
+            },
+            "internships": {
+                "total": total_internships,
+                "last_found_date": last_internship.isoformat() if last_internship else None,
+            },
+            "leetcode": {
+                "total_solved": total_leetcode,
+                "last_solved_at": last_leetcode.isoformat() if last_leetcode else None,
+            },
+        },
+    }
