@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 
+type DocumentStatus = 'processing' | 'complete' | 'failed'
+
 interface Document {
   id: string
   filename: string
@@ -9,6 +11,7 @@ interface Document {
   summary: string
   chunk_count: number
   size_bytes: number
+  status: DocumentStatus
   added_at: string | null
 }
 
@@ -49,9 +52,10 @@ export default function DocumentsView() {
     fetchDocs()
   }, [fetchDocs])
 
-  // Poll while any document is still being processed (chunk_count = 0)
+  // Poll while any document is still being processed. Stop once every
+  // row has settled into 'complete' or 'failed' — no point refetching.
   useEffect(() => {
-    const stillProcessing = docs.some((d) => d.chunk_count === 0)
+    const stillProcessing = docs.some((d) => d.status === 'processing')
     if (!stillProcessing) return
     const id = setInterval(fetchDocs, 4000)
     return () => clearInterval(id)
@@ -262,10 +266,22 @@ export default function DocumentsView() {
                       {formatBytes(d.size_bytes)}
                     </td>
                     <td className="px-5 py-3 align-top text-xs" style={{ color: 'var(--text)' }}>
-                      {d.chunk_count === 0 ? (
+                      {d.status === 'processing' ? (
                         <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
                           <Spinner />
                           Processing…
+                        </span>
+                      ) : d.status === 'failed' ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            className="inline-block px-1.5 py-0.5 rounded text-xs font-medium"
+                            style={{ background: '#FEE2E2', color: '#B91C1C' }}
+                          >
+                            Failed
+                          </span>
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            Delete and re-upload to retry
+                          </span>
                         </span>
                       ) : (
                         d.summary || <span style={{ color: 'var(--text-muted)' }}>—</span>
@@ -276,7 +292,7 @@ export default function DocumentsView() {
                         type="button"
                         onClick={() => onDelete(d)}
                         disabled={deletingId === d.id}
-                        title="Delete document"
+                        title={d.status === 'failed' ? 'Delete and re-upload to retry' : 'Delete document'}
                         className="p-1.5 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
                         style={{ color: '#DC2626' }}
                       >

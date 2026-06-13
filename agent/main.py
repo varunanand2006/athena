@@ -425,7 +425,7 @@ def list_documents_endpoint():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, filename, title, doc_type, summary, chunk_count, size_bytes, added_at
+                SELECT id, filename, title, doc_type, summary, chunk_count, size_bytes, status, added_at
                 FROM documents
                 ORDER BY added_at DESC
                 """
@@ -442,7 +442,8 @@ def list_documents_endpoint():
             "summary": r[4] or "",
             "chunk_count": r[5],
             "size_bytes": r[6],
-            "added_at": r[7].isoformat() if r[7] else None,
+            "status": r[7],
+            "added_at": r[8].isoformat() if r[8] else None,
         }
         for r in rows
     ]
