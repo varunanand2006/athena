@@ -107,8 +107,20 @@ CREATE TABLE IF NOT EXISTS documents (
     summary     TEXT,
     chunk_count INTEGER     NOT NULL DEFAULT 0,
     size_bytes  INTEGER     NOT NULL DEFAULT 0,
+    status      TEXT        NOT NULL DEFAULT 'processing',
     added_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_added_at ON documents (added_at DESC);
+
+-- Phase 10: Ingestion Reliability — status column for existing rows.
+-- `status` values: 'processing' | 'complete' | 'failed'. Backfill any
+-- pre-existing rows that already finished embedding before this column existed.
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'processing';
+
+UPDATE documents
+   SET status = 'complete'
+ WHERE chunk_count > 0
+   AND status = 'processing';
 
