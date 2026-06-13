@@ -20,7 +20,7 @@ question, err toward implementing and noting any assumptions made.
 - `ingestion/` — Document ingestion pipelines (LlamaIndex, Python)
 - `internship/` — Internship hunter service (APScheduler, daily pipeline)
 - `leetcode/` — LeetCode poller service (APScheduler, daily GraphQL sync + Ollama analysis)
-- `frontend/` — React web app (Vite + TypeScript + Tailwind); served by nginx on vlinux2, proxies `/chat /conversations /internships /leetcode /healthz /documents` to the agent and `/ingest /toc` to the ingestion service
+- `frontend/` — React web app (Vite + TypeScript + Tailwind); served by nginx on vlinux2, proxies `/chat /conversations /internships /leetcode /healthz /documents /system` to the agent and `/ingest /toc` to the ingestion service
 - `scripts/` — Setup and utility scripts (k3s setup, DB migrations, model pulls)
 - `docs/` — Architecture docs, phase notes, ADRs
 - `/data/documents` (PVC on vlinux2) — source-of-truth file store for the document library; original files persist here, mounted into the ingestion pod
@@ -46,34 +46,50 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 9 — Document Storage & Catalog. The ingestion service is upgraded from
-"embed and discard" to a full document management layer. Original files are
-retained on a 10Gi PVC at `/data/documents` (vlinux2), cataloged in a new
-Postgres `documents` table, embedded in the Qdrant `documents` collection,
-and summarized once at ingestion via gemma4:e2b. A markdown
-`_TABLE_OF_CONTENTS.md` is regenerated on the PVC after every change.
+Phase 10 — Ingestion Reliability + System Health. The ingestion service
+now tracks a real `status` column on `documents` (`processing` |
+`complete` | `failed`) instead of the frontend inferring state from
+`chunk_count == 0`. The background thread in `_embed_and_summarize`
+calls `_mark_complete(document_id)` after the chunks-and-summary
+UPDATE lands, and `_mark_failed(document_id, reason)` at every known
+early-return site (text extraction failed, no content, embedding
+failure, qdrant upsert failure, catalog UPDATE failure). An outer
+`try/except Exception` in the same function is the safety net for
+crashes the inner blocks don't cover (e.g. `SentenceSplitter`) —
+without it a crashed daemon thread leaves the row stuck at
+`processing` forever.
 
-POST `/ingest` now returns immediately after writing the catalog row and
-spawns a daemon thread for chunking/embedding/summary, so large files no
-longer trip the nginx/axios proxy timeout. A `BackgroundScheduler` on a
-5-min interval watches `/data/documents` and auto-ingests anything not
-yet in the catalog — dropping a file directly into the folder has the
-same effect as uploading via the frontend. New ingestion endpoints:
-`GET /toc`, `DELETE /ingest/documents/{id}`.
+A second APScheduler job in the ingestion `lifespan` runs every
+10 min: any row in `status='processing'` for more than 30 min is
+flipped to `failed` with a logged reason. This catches rows orphaned
+by a pod restart mid-ingest, where the daemon thread that would
+have caught the exception no longer exists.
 
-Agent gets three browsing tools complementing the existing semantic
-`search_documents`: `list_documents`, `get_table_of_contents`,
-`get_document_summary`. New JSON endpoint: `GET /documents`.
+Frontend Documents view reads the new `status` field directly — spinner
+while `processing`, red "Failed" badge with "Delete and re-upload to
+retry" hint when `failed`, summary text when `complete`. Polling stops
+as soon as every row has settled (no more 4 s refetch forever on stuck
+rows). Retry = the existing per-row delete button (no auto re-upload).
 
-Frontend has a `/documents` route with a labeled "Upload file" button
-(also drag-drop), a catalog table that polls every 4s while any row has
-`chunk_count = 0`, and per-row delete with confirm.
+New agent endpoint `GET /system/health` fans out 2s parallel pings to
+ingestion, ollama, qdrant, and searxng via `httpx.AsyncClient` +
+`asyncio.gather`, plus a single Postgres round-trip for the data
+snapshot (documents total + `by_status`, internships total +
+`last_found_date`, leetcode total_solved + `last_solved_at`). Agent
+self-check is hardcoded `reachable=true, latency_ms=0` since we're
+inside the process. New frontend route `/system` renders five service
+rows with green/red status dots + latency and three data cards
+(Documents w/ status breakdown, Internships found, LeetCode solved),
+auto-refreshing every 15 s.
 
-**Naming clarification:** the Qdrant collection `documents` (vector chunks)
-and the Postgres table `documents` (catalog rows) are different stores.
-Catalog row = one document. Qdrant point = one chunk of that document's
-text, stamped with the row's `document_id` in its payload for clean
-delete-by-filter on re-ingest or row delete.
+**Phase 9 context still applies:** The Qdrant collection `documents`
+(vector chunks) and the Postgres table `documents` (catalog rows) are
+different stores. Catalog row = one document; Qdrant point = one
+chunk of that document's text, stamped with the row's `document_id`
+in its payload for clean delete-by-filter on re-ingest or row delete.
+Original files live on a 10Gi PVC at `/data/documents` on vlinux2, and
+a `BackgroundScheduler` watches that folder every 5 min for files
+dropped in directly.
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`
@@ -98,13 +114,15 @@ delete-by-filter on re-ingest or row delete.
 - **Multi-chat history** — pass full conversation history as the `messages` array to `create_react_agent`; load it from Postgres ordered by `created_at ASC` before every /chat call; the agent sees all prior turns as context
 - **UUID primary keys** — use `gen_random_uuid()` as the default for UUID PKs in Postgres; returns a `uuid` type, cast to `str` in Python before returning in JSON
 - **Postgres schema — conversations/messages** — `conversations(id uuid pk, title text, created_at, updated_at)`; `messages(id uuid pk, conversation_id uuid fk→conversations, role text, content text, created_at)`; index on `messages(conversation_id)`
-- **Postgres schema — documents** — `documents(id uuid pk, filename text unique, title text, doc_type text, file_path text, summary text, chunk_count int, size_bytes int, added_at)`; index on `(added_at DESC)`; `filename UNIQUE` so re-ingest of the same name is detectable; distinct from the Qdrant `documents` collection (vector chunks)
+- **Postgres schema — documents** — `documents(id uuid pk, filename text unique, title text, doc_type text, file_path text, summary text, chunk_count int, size_bytes int, status text default 'processing', added_at)`; index on `(added_at DESC)`; `filename UNIQUE` so re-ingest of the same name is detectable; `status` values are `processing | complete | failed`; distinct from the Qdrant `documents` collection (vector chunks)
 - **Local-path PVC pinning** — k3s `local-path` storage binds the PV to whichever node first schedules a pod that mounts it; for a stateful workload pin the deployment with `nodeSelector: kubernetes.io/hostname: <node>` so the PVC and pod always co-locate. Used for `/data/documents` on vlinux2.
 - **BackgroundScheduler alongside FastAPI** — for services that need both an HTTP API and a recurring background job, use `apscheduler.schedulers.background.BackgroundScheduler` (not `BlockingScheduler`) and start it inside a FastAPI `lifespan` context manager. The scheduler runs in its own thread so uvicorn keeps the event loop. Shut it down in the `finally` of the lifespan with `scheduler.shutdown(wait=False)`. Pattern: ingestion service watches `/data/documents` every 5 min while still serving POST `/ingest`.
 - **Async ingest pattern** — split heavy work (chunking, Ollama embedding loop, summary call) from the request handler: handler does just the fast catalog-row INSERT and returns, then spawns `threading.Thread(daemon=True)` for the heavy part. Frontend polls the catalog endpoint every few seconds and renders "Processing…" for rows where `chunk_count == 0`. Avoids nginx/axios proxy timeouts on large files without needing a full queue/worker system.
 - **Document re-ingest cleanup** — when re-ingesting a file with the same name, you must delete the old Qdrant points OR they linger as orphan chunks. Stamp `document_id` (the catalog row's UUID) into each Qdrant point's payload at ingest time, then on re-ingest or row delete use `qdrant.delete(points_selector=FilterSelector(filter=Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=old_id))])))`. Same pattern handles `DELETE /ingest/documents/{id}`.
 - **PVC file delete must accompany catalog delete** — when removing a cataloged document, you must also `Path(file_path).unlink()` on the PVC. Leaving the file would cause the folder watcher's next scan to re-ingest it because the filename isn't in the catalog anymore. Three-way cleanup: Qdrant delete-by-filter → catalog row DELETE → file unlink → regenerate TOC.
 - **Atomic TOC writes** — the folder watcher and any other readers of `_TABLE_OF_CONTENTS.md` could observe a half-written file if you write in place. Write to `.tmp` then `os.replace()` (atomic on the same filesystem). The watcher also skips `.tmp` extensions and any filename starting with `_` to avoid ingesting its own artifact.
+- **Background-job failure visibility** — when a daemon thread does the real work, the request handler has already returned 200 and can't surface failures to the client. Pattern: a `status` column on the catalog row with three states (`processing` default → `complete` on success → `failed` on any error); explicit `_mark_failed(...)` at each known early-return site inside the worker function; outer `try/except Exception` around the whole worker body for uncaught crashes; a separate APScheduler reaper job (10 min interval, 30 min threshold) that flips long-`processing` rows to `failed` to recover from pod restarts that killed the worker without giving it a chance to mark anything failed.
+- **App-level health aggregation** — a single endpoint that fan-outs to internal services with short per-check timeouts (2 s) via `httpx.AsyncClient` + `asyncio.gather`, so one dead dependency can't hang the whole view. Treat any non-5xx as "reachable" — a 404 on `/healthz` still proves the service answered a TCP request. Hardcode the self-check (the endpoint can't be answering if we're not reachable). Combine reachability with a Postgres data-snapshot query in the same response so the UI gets everything in one round-trip and can auto-refresh on a single interval.
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components
