@@ -124,3 +124,13 @@ UPDATE documents
  WHERE chunk_count > 0
    AND status = 'processing';
 
+-- Phase 11: Summary-based RAG.
+-- Cache the extracted full text on the catalog row so the agent's
+-- load_document tool can return whole documents without re-parsing the file
+-- from the PVC. One row = one document under summary-routing, so this column
+-- holds the entire document text (no chunks).
+-- `chunk_count` is now vestigial — always 1 once status='complete', 0 while
+-- processing. `status` remains the source of truth for ingestion state.
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS full_text TEXT;
+
