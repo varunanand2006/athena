@@ -12,7 +12,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from llama_index.core import SimpleDirectoryReader
-from llama_index.core.node_parser import SentenceSplitter
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -247,17 +246,22 @@ def _insert_catalog_row(file_path: Path, original_filename: str) -> str:
 
 
 def _embed_and_summarize(document_id: str, file_path: Path, original_filename: str) -> None:
-    """Heavy work: chunk, embed, summarize, update catalog, regenerate TOC.
+    """Heavy work for summary-routing RAG: extract full text, summarize,
+    embed the summary, upsert one Qdrant point, cache the full text on the
+    catalog row, regenerate TOC.
 
-    Runs in a background thread for POST /ingest so big files don't block
-    the client past the proxy timeout. The watcher calls it inline since
-    it already runs in the APScheduler thread.
+    One vector per document (over its summary). The agent's find_documents
+    tool searches these summary vectors; load_document then returns
+    full_text from Postgres so it can answer from real content.
 
-    Transitions the catalog row to status='complete' on success or
-    status='failed' on any error. The outer try/except is the safety net
-    for uncaught crashes (e.g. SentenceSplitter blowing up) that the
-    inner per-step except blocks don't cover — without it a crashed
-    daemon thread would leave the row stuck at 'processing' forever.
+    Phase 10 reliability machinery preserved: _mark_failed at every
+    early-return site, outer try/except as the safety net for uncaught
+    crashes, _mark_complete before _regenerate_toc so a cosmetic TOC
+    failure can't roll the row back to failed.
+
+    Unlike Phase 10, summary generation is now a HARD failure — the
+    summary IS the retrieval key under this model, so a document with no
+    summary is unretrievable and not worth keeping in the catalog.
     """
     try:
         try:
@@ -266,62 +270,59 @@ def _embed_and_summarize(document_id: str, file_path: Path, original_filename: s
             log.exception("text extraction failed for %s", original_filename)
             _mark_failed(document_id, "text extraction failed")
             return
-        if not docs:
-            log.warning("text extraction produced no content for %s", original_filename)
-            _mark_failed(document_id, "text extraction produced no content")
+
+        full_text = "\n\n".join(
+            d.get_content().strip() for d in docs if d.get_content().strip()
+        )
+        if not full_text:
+            log.warning("no extractable text for %s", original_filename)
+            _mark_failed(document_id, "no extractable text")
             return
 
-        splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
-        nodes = splitter.get_nodes_from_documents(docs)
+        try:
+            summary = _generate_summary(full_text)
+        except Exception:
+            log.exception("summary generation failed for %s", original_filename)
+            _mark_failed(document_id, "summary generation failed")
+            return
+        if not summary.strip():
+            log.warning("summary generation returned empty for %s", original_filename)
+            _mark_failed(document_id, "summary generation returned empty")
+            return
 
-        points = []
-        full_text_parts = []
-        for node in nodes:
-            text = node.get_content().strip()
-            if not text:
-                continue
-            full_text_parts.append(text)
-            try:
-                vector = _embed(text)
-            except Exception:
-                log.exception("embedding call failed for %s chunk", original_filename)
-                _mark_failed(document_id, "embedding call failed")
-                return
-            points.append(PointStruct(
-                id=str(uuid.uuid4()),
-                vector=vector,
-                payload={
-                    "text": text,
-                    "filename": original_filename,
-                    "document_id": document_id,
-                },
-            ))
+        try:
+            vector = _embed(summary)
+        except Exception:
+            log.exception("embedding call failed for %s", original_filename)
+            _mark_failed(document_id, "embedding call failed")
+            return
 
-        if points:
-            try:
-                qdrant.upsert(collection_name=COLLECTION, points=points)
-            except Exception:
-                log.exception("qdrant upsert failed for %s", original_filename)
-                _mark_failed(document_id, "qdrant upsert failed")
-                return
-
-        chunk_count = len(points)
-        full_text = "\n\n".join(full_text_parts)
-        summary = ""
-        if full_text:
-            try:
-                summary = _generate_summary(full_text)
-            except Exception:
-                log.exception("summary generation failed for %s", original_filename)
-                summary = ""
+        title = file_path.stem
+        try:
+            qdrant.upsert(
+                collection_name=COLLECTION,
+                points=[PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vector,
+                    payload={
+                        "document_id": document_id,
+                        "title": title,
+                        "summary": summary,
+                    },
+                )],
+            )
+        except Exception:
+            log.exception("qdrant upsert failed for %s", original_filename)
+            _mark_failed(document_id, "qdrant upsert failed")
+            return
 
         try:
             conn = pg_conn()
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE documents SET summary = %s, chunk_count = %s WHERE id = %s",
-                        (summary, chunk_count, document_id),
+                        "UPDATE documents SET full_text = %s, summary = %s, chunk_count = 1 WHERE id = %s",
+                        (full_text, summary, document_id),
                     )
                     conn.commit()
             finally:
@@ -338,7 +339,7 @@ def _embed_and_summarize(document_id: str, file_path: Path, original_filename: s
         except Exception:
             log.exception("toc regeneration failed after ingest of %s", original_filename)
 
-        log.info("ingest complete for %s (%s chunks)", original_filename, chunk_count)
+        log.info("ingest complete for %s (%d chars)", original_filename, len(full_text))
     except Exception as e:
         log.exception("unexpected error during ingest of %s", original_filename)
         _mark_failed(document_id, f"unexpected error: {e}")
