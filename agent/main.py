@@ -66,10 +66,12 @@ def web_search(query: str) -> str:
 
 
 @tool
-def search_documents(query: str) -> str:
-    """Search personal documents (resume, notes, project writeups) stored in Qdrant.
-    Use this tool when the question is about the user's own background, skills, experience,
-    projects, or anything that would be found in personal documents."""
+def find_documents(query: str) -> str:
+    """Find which documents are relevant to a query by searching their summaries.
+    Returns up to 3 matching documents with their id, title, summary, and similarity score.
+    This is the *routing* step — it tells you which documents to read, not the answer.
+    After calling this, call load_document with one of the returned ids (or titles) to
+    read the full text and answer from real content."""
     with httpx.Client(timeout=30) as client:
         embed_resp = client.post(
             f"{OLLAMA_BASE_URL}/api/embeddings",
@@ -80,21 +82,61 @@ def search_documents(query: str) -> str:
 
         search_resp = client.post(
             f"{QDRANT_URL}/collections/documents/points/search",
-            json={"vector": vector, "limit": 5, "with_payload": True},
+            json={"vector": vector, "limit": 3, "with_payload": True},
         )
         search_resp.raise_for_status()
         hits = search_resp.json().get("result", [])
 
     if not hits:
-        return "No relevant documents found."
+        return "No matching documents found."
 
-    lines = []
+    blocks = []
     for hit in hits:
-        text = hit.get("payload", {}).get("text", "").strip()
+        payload = hit.get("payload", {})
+        title = payload.get("title", "(untitled)")
+        doc_id = payload.get("document_id", "")
+        summary = (payload.get("summary", "") or "").strip()
         score = hit.get("score", 0)
-        if text:
-            lines.append(f"[score={score:.2f}] {text[:400]}")
-    return "\n\n".join(lines) if lines else "No relevant documents found."
+        blocks.append(f"[score={score:.2f}] {title} (id={doc_id})\n{summary}")
+    return "\n\n".join(blocks)
+
+
+@tool
+def load_document(identifier: str) -> str:
+    """Load a document's full text from the catalog, given its id (UUID) OR a
+    substring of its title/filename. Returns the title and the complete document
+    text. Use this AFTER find_documents to read the content needed to answer a
+    question — the summary returned by find_documents is for routing only, never
+    for substantive answers."""
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT title, full_text FROM documents WHERE id::text = %s",
+                (identifier,),
+            )
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    """
+                    SELECT title, full_text
+                    FROM documents
+                    WHERE filename ILIKE %s OR title ILIKE %s
+                    ORDER BY added_at DESC
+                    LIMIT 1
+                    """,
+                    (f"%{identifier}%", f"%{identifier}%"),
+                )
+                row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return f"No document matching '{identifier}' was found."
+    title, full_text = row
+    if not full_text:
+        return f"{title}: (document has no cached full text)"
+    return f"{title}\n\n{full_text}"
 
 
 @tool
@@ -210,10 +252,14 @@ def get_document_summary(name: str) -> str:
 
 SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
-    "You have access to these tools: web_search, search_documents, lookup_leetcode, "
-    "list_documents, get_table_of_contents, and get_document_summary. "
-    "For questions about the user's own background, resume, skills, projects, or experience, "
-    "you MUST call search_documents to semantically search document contents before answering. "
+    "You have access to these tools: web_search, find_documents, load_document, "
+    "lookup_leetcode, list_documents, get_table_of_contents, and get_document_summary. "
+    "For content questions about the user's own documents — background, resume, skills, "
+    "projects, notes — follow this two-step flow: (1) call find_documents(query) to "
+    "identify the relevant document(s) by summary similarity, then (2) call "
+    "load_document(id_or_title) on the best match to read its full text, then answer "
+    "from that full text. The summary returned by find_documents is for routing only; "
+    "never answer substantive content questions from it — always load the full text first. "
     "For questions about which documents exist or what's in the library — e.g. \"what documents "
     "do you have access to\" or \"show me the table of contents\" — use list_documents or "
     "get_table_of_contents to *browse* the catalog (these do not search content). "
@@ -270,7 +316,8 @@ async def chat(req: ChatRequest):
             llm,
             tools=[
                 web_search,
-                search_documents,
+                find_documents,
+                load_document,
                 lookup_leetcode,
                 list_documents,
                 get_table_of_contents,
