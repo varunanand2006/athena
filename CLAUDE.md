@@ -46,50 +46,54 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 10 — Ingestion Reliability + System Health. The ingestion service
-now tracks a real `status` column on `documents` (`processing` |
-`complete` | `failed`) instead of the frontend inferring state from
-`chunk_count == 0`. The background thread in `_embed_and_summarize`
-calls `_mark_complete(document_id)` after the chunks-and-summary
-UPDATE lands, and `_mark_failed(document_id, reason)` at every known
-early-return site (text extraction failed, no content, embedding
-failure, qdrant upsert failure, catalog UPDATE failure). An outer
-`try/except Exception` in the same function is the safety net for
-crashes the inner blocks don't cover (e.g. `SentenceSplitter`) —
-without it a crashed daemon thread leaves the row stuck at
-`processing` forever.
+Phase 11 — Summary-based RAG. Chunk-level retrieval is gone. The
+ingestion pipeline now produces **one Qdrant point per document** —
+its vector is the embedding of the gemma4:e2b-generated summary, not
+of any chunk. The full extracted document text is cached on the
+catalog row in a new `full_text TEXT` column so the agent can load
+whole documents back without re-parsing the file from the PVC.
+Retrieval at query time is a two-step routing flow:
 
-A second APScheduler job in the ingestion `lifespan` runs every
-10 min: any row in `status='processing'` for more than 30 min is
-flipped to `failed` with a logged reason. This catches rows orphaned
-by a pod restart mid-ingest, where the daemon thread that would
-have caught the exception no longer exists.
+1. `find_documents(query)` — embed the query via nomic-embed-text,
+   search the `documents` Qdrant collection (limit=3), return
+   `{document_id, title, summary, score}` for each hit. This picks
+   *which* document is relevant; it is not the answer.
+2. `load_document(id_or_title)` — return `title + full_text` from the
+   Postgres `documents.full_text` cache. The agent answers from this
+   full text, not from the summary.
 
-Frontend Documents view reads the new `status` field directly — spinner
-while `processing`, red "Failed" badge with "Delete and re-upload to
-retry" hint when `failed`, summary text when `complete`. Polling stops
-as soon as every row has settled (no more 4 s refetch forever on stuck
-rows). Retry = the existing per-row delete button (no auto re-upload).
+The old `search_documents` tool is removed. The system prompt forbids
+answering substantive content questions from the summary alone — load
+the full text first.
 
-New agent endpoint `GET /system/health` fans out 2s parallel pings to
-ingestion, ollama, qdrant, and searxng via `httpx.AsyncClient` +
-`asyncio.gather`, plus a single Postgres round-trip for the data
-snapshot (documents total + `by_status`, internships total +
-`last_found_date`, leetcode total_solved + `last_solved_at`). Agent
-self-check is hardcoded `reachable=true, latency_ms=0` since we're
-inside the process. New frontend route `/system` renders five service
-rows with green/red status dots + latency and three data cards
-(Documents w/ status breakdown, Internships found, LeetCode solved),
-auto-refreshing every 15 s.
+Ingestion-side, `_embed_and_summarize` now: extracts full text via
+`SimpleDirectoryReader` and joins it into one string, generates the
+summary (now a **required** artifact — no summary means
+unretrievable, so empty summary is a hard `_mark_failed`), embeds the
+summary, upserts one Qdrant point with payload
+`{document_id, title, summary}`, then UPDATEs the row with
+`full_text + summary + chunk_count=1`. All Phase 10 reliability
+machinery is preserved: explicit `_mark_failed` at every early-return
+site, the outer `try/except` safety net, `_mark_complete` before
+`_regenerate_toc` (TOC failure stays cosmetic), and the 30-min reaper
+for rows orphaned by pod restarts. `chunk_count` is now vestigial
+(always 1 on `complete`, 0 while `processing`); `status` remains the
+source of truth.
 
-**Phase 9 context still applies:** The Qdrant collection `documents`
-(vector chunks) and the Postgres table `documents` (catalog rows) are
-different stores. Catalog row = one document; Qdrant point = one
-chunk of that document's text, stamped with the row's `document_id`
-in its payload for clean delete-by-filter on re-ingest or row delete.
-Original files live on a 10Gi PVC at `/data/documents` on vlinux2, and
-a `BackgroundScheduler` watches that folder every 5 min for files
-dropped in directly.
+**Phase 10 context still applies:** the `status` column (`processing |
+complete | failed`) drives the frontend Documents view (spinner /
+summary / red "Failed" badge with retry-by-delete hint), polling
+stops once every row settles, and the agent's `/system/health`
+endpoint + `/system` view are unchanged.
+
+**Phase 9 context still applies:** the Postgres `documents` table and
+the Qdrant `documents` collection remain different stores. They are
+now 1:1 (one catalog row = one Qdrant point) instead of 1:N (one row
+= many chunk points), but `document_id` is still stamped into each
+point's payload so re-ingest and row-delete continue to use
+delete-by-filter cleanly. Original files live on the 10Gi PVC at
+`/data/documents` on vlinux2; a `BackgroundScheduler` watches that
+folder every 5 min for files dropped in directly.
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`
@@ -114,15 +118,17 @@ dropped in directly.
 - **Multi-chat history** — pass full conversation history as the `messages` array to `create_react_agent`; load it from Postgres ordered by `created_at ASC` before every /chat call; the agent sees all prior turns as context
 - **UUID primary keys** — use `gen_random_uuid()` as the default for UUID PKs in Postgres; returns a `uuid` type, cast to `str` in Python before returning in JSON
 - **Postgres schema — conversations/messages** — `conversations(id uuid pk, title text, created_at, updated_at)`; `messages(id uuid pk, conversation_id uuid fk→conversations, role text, content text, created_at)`; index on `messages(conversation_id)`
-- **Postgres schema — documents** — `documents(id uuid pk, filename text unique, title text, doc_type text, file_path text, summary text, chunk_count int, size_bytes int, status text default 'processing', added_at)`; index on `(added_at DESC)`; `filename UNIQUE` so re-ingest of the same name is detectable; `status` values are `processing | complete | failed`; distinct from the Qdrant `documents` collection (vector chunks)
+- **Postgres schema — documents** — `documents(id uuid pk, filename text unique, title text, doc_type text, file_path text, summary text, full_text text, chunk_count int, size_bytes int, status text default 'processing', added_at)`; index on `(added_at DESC)`; `filename UNIQUE` so re-ingest of the same name is detectable; `status` values are `processing | complete | failed`; `full_text` caches the extracted document text for the agent's `load_document` tool under summary-routing RAG; `chunk_count` is vestigial post-Phase-11 (always 1 on `complete`, 0 while `processing`) — kept to avoid a destructive migration; distinct from the Qdrant `documents` collection (one summary vector per document)
 - **Local-path PVC pinning** — k3s `local-path` storage binds the PV to whichever node first schedules a pod that mounts it; for a stateful workload pin the deployment with `nodeSelector: kubernetes.io/hostname: <node>` so the PVC and pod always co-locate. Used for `/data/documents` on vlinux2.
 - **BackgroundScheduler alongside FastAPI** — for services that need both an HTTP API and a recurring background job, use `apscheduler.schedulers.background.BackgroundScheduler` (not `BlockingScheduler`) and start it inside a FastAPI `lifespan` context manager. The scheduler runs in its own thread so uvicorn keeps the event loop. Shut it down in the `finally` of the lifespan with `scheduler.shutdown(wait=False)`. Pattern: ingestion service watches `/data/documents` every 5 min while still serving POST `/ingest`.
-- **Async ingest pattern** — split heavy work (chunking, Ollama embedding loop, summary call) from the request handler: handler does just the fast catalog-row INSERT and returns, then spawns `threading.Thread(daemon=True)` for the heavy part. Frontend polls the catalog endpoint every few seconds and renders "Processing…" for rows where `chunk_count == 0`. Avoids nginx/axios proxy timeouts on large files without needing a full queue/worker system.
-- **Document re-ingest cleanup** — when re-ingesting a file with the same name, you must delete the old Qdrant points OR they linger as orphan chunks. Stamp `document_id` (the catalog row's UUID) into each Qdrant point's payload at ingest time, then on re-ingest or row delete use `qdrant.delete(points_selector=FilterSelector(filter=Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=old_id))])))`. Same pattern handles `DELETE /ingest/documents/{id}`.
+- **Async ingest pattern** — split heavy work (text extraction, summary call, embed, Qdrant upsert) from the request handler: handler does just the fast catalog-row INSERT and returns, then spawns `threading.Thread(daemon=True)` for the heavy part. Frontend polls the catalog endpoint every few seconds and renders "Processing…" for rows where `status == 'processing'`. Avoids nginx/axios proxy timeouts on large files without needing a full queue/worker system.
+- **Document re-ingest cleanup** — when re-ingesting a file with the same name, you must delete the old Qdrant point(s) OR they linger as orphans. Stamp `document_id` (the catalog row's UUID) into each Qdrant point's payload at ingest time, then on re-ingest or row delete use `qdrant.delete(points_selector=FilterSelector(filter=Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=old_id))])))`. Same pattern handles `DELETE /ingest/documents/{id}`. Post-Phase-11 this is a single-point delete per document (one summary vector each), but the filter-by-`document_id` mechanism is unchanged — also covers the pre-Phase-11 multi-chunk case if any old rows linger.
 - **PVC file delete must accompany catalog delete** — when removing a cataloged document, you must also `Path(file_path).unlink()` on the PVC. Leaving the file would cause the folder watcher's next scan to re-ingest it because the filename isn't in the catalog anymore. Three-way cleanup: Qdrant delete-by-filter → catalog row DELETE → file unlink → regenerate TOC.
 - **Atomic TOC writes** — the folder watcher and any other readers of `_TABLE_OF_CONTENTS.md` could observe a half-written file if you write in place. Write to `.tmp` then `os.replace()` (atomic on the same filesystem). The watcher also skips `.tmp` extensions and any filename starting with `_` to avoid ingesting its own artifact.
 - **Background-job failure visibility** — when a daemon thread does the real work, the request handler has already returned 200 and can't surface failures to the client. Pattern: a `status` column on the catalog row with three states (`processing` default → `complete` on success → `failed` on any error); explicit `_mark_failed(...)` at each known early-return site inside the worker function; outer `try/except Exception` around the whole worker body for uncaught crashes; a separate APScheduler reaper job (10 min interval, 30 min threshold) that flips long-`processing` rows to `failed` to recover from pod restarts that killed the worker without giving it a chance to mark anything failed.
 - **App-level health aggregation** — a single endpoint that fan-outs to internal services with short per-check timeouts (2 s) via `httpx.AsyncClient` + `asyncio.gather`, so one dead dependency can't hang the whole view. Treat any non-5xx as "reachable" — a 404 on `/healthz` still proves the service answered a TCP request. Hardcode the self-check (the endpoint can't be answering if we're not reachable). Combine reachability with a Postgres data-snapshot query in the same response so the UI gets everything in one round-trip and can auto-refresh on a single interval.
+- **Match retrieval architecture to corpus shape** — chunk-level RAG is overkill for a small library of short, organized, text-only documents (class notes, resumes, project writeups). Replacing it with summary-level routing (one vector per document over its summary) plus full-document loading from Postgres on hit is cheaper at ingest (one embed + one upsert per doc instead of N) and gives the LLM strictly more context per hit (whole doc, not a 512-token chunk). Tradeoff: weak on very long documents (entire doc must fit in the LLM context), and the summary becomes a **required** ingest artifact because it IS the retrieval key — empty summary must be a hard `_mark_failed`, not a partial success.
+- **Agent two-step retrieval (route, then load)** — keep "find the right document" and "read its content" as separate tools (`find_documents` + `load_document`), not one fused "search" tool. The system prompt then says explicitly: never answer substantive content questions from the summary returned by the routing step — always call `load_document` on the top hit and answer from full text. Two clear tools the LLM can reason about beat one ambiguous tool whose output looks like an answer but isn't one.
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components

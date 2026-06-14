@@ -4,7 +4,7 @@
 > Running on a bare-metal k3s cluster with local and cloud LLMs, a LangGraph orchestration layer, and a React dashboard.
 
 ## Status
-**Phase 7 complete** — Model router live. GPT-4o-mini handles interactive chat; gemma4:e2b handles background pipeline tasks.
+**Phase 11 complete** — Summary-based RAG. One vector per document over its gemma4:e2b summary; the agent's `find_documents` tool routes by summary similarity, `load_document` returns the full text from Postgres. Replaces the per-chunk pipeline from Phase 3.
 
 ## Architecture
 
@@ -20,8 +20,9 @@ LangGraph Agent (agent.local)
   │  mode=background → gemma4:e2b (Ollama)
   │
   ├── web_search() ──────────────► SearXNG (searxng.local)
-  ├── search_documents() ─────────► Qdrant (qdrant.local)
-  │     └── embed via nomic-embed-text (Ollama)
+  ├── find_documents(query) ─────► Qdrant (qdrant.local)
+  │     └── summary-vector search (limit 3) via nomic-embed-text (Ollama)
+  ├── load_document(id|title) ───► PostgreSQL documents.full_text
   └── lookup_leetcode() ──────────► PostgreSQL
 
 Background Services (APScheduler, vlinux2)
@@ -29,7 +30,8 @@ Background Services (APScheduler, vlinux2)
   └── LeetCode Poller  — polls LeetCode GraphQL, syncs submissions to Postgres
 
 Ingestion Pipeline (ingest.local)
-  └── POST /ingest → LlamaIndex chunk → nomic-embed-text → Qdrant
+  └── POST /ingest → LlamaIndex extract → gemma4:e2b summary → nomic-embed-text on summary
+                  → one Qdrant point per document + cache full_text in Postgres
 ```
 
 ## Stack
@@ -56,12 +58,16 @@ Ingestion Pipeline (ingest.local)
 
 - [x] Phase 1 — Cluster foundation (k3s, Traefik, PostgreSQL, Qdrant, Ollama, SearXNG)
 - [x] Phase 2 — LangGraph agent (ReAct loop, tool routing, FastAPI)
-- [x] Phase 3 — RAG pipeline (LlamaIndex ingestion, nomic-embed-text, Qdrant search)
+- [x] Phase 3 — RAG pipeline (LlamaIndex ingestion, nomic-embed-text, Qdrant search) — superseded by Phase 11
 - [x] Phase 5 — Internship hunter (GitHub README scraper, LLM scoring, daily cron)
 - [x] Phase 6 — LeetCode poller + frontend dashboard (GraphQL sync, React + recharts)
 - [x] Phase 7 — Model router (GPT-4o-mini for chat, gemma4:e2b for background)
+- [x] Phase 8 — Multi-chat conversations (Postgres-backed history, conversation sidebar)
+- [x] Phase 9 — Document storage & catalog (PVC, folder watcher, summaries, TOC)
+- [x] Phase 10 — Ingestion reliability + system health (status column, reaper, /system view)
+- [x] Phase 11 — Summary-based RAG (one vector per document, find_documents + load_document)
 - [ ] Phase 4 — Rust MCP server
-- [ ] Phase 8 — Notifications + daily digest (Twilio, n8n)
+- [ ] Notifications + daily digest (Twilio, n8n)
 
 ## Hardware
 

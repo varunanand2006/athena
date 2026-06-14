@@ -30,7 +30,7 @@ All inference is CPU-only. No GPUs.
 | Vector store | Qdrant v1.13.6 | ✅ Running | Semantic search over ingested documents |
 | Relational DB | PostgreSQL 16 | ✅ Running | Internship postings, LeetCode data |
 | Search | SearXNG | ✅ Running | Web search tool for the agent |
-| Ingestion | LlamaIndex + FastAPI + APScheduler | ✅ Running | Document upload, persistent PVC store, chunking, embedding, summarization, folder watcher, catalog (Postgres) + TOC |
+| Ingestion | LlamaIndex + FastAPI + APScheduler | ✅ Running | Document upload, persistent PVC store, full-text caching, summarization, one summary vector per document, folder watcher, catalog (Postgres) + TOC |
 | Document PVC | k3s local-path (10Gi, vlinux2) | ✅ Running | Source-of-truth file store at `/data/documents`; survives pod restarts |
 | Internship hunter | APScheduler (Python) | ✅ Running | Daily GitHub README scrape → LLM score → Postgres |
 | LeetCode poller | APScheduler (Python) | ✅ Running | Daily GraphQL sync, Ollama analysis queue |
@@ -57,8 +57,9 @@ LangGraph Agent — agent.local (xdev-sr)
       ├─ mode=background ► Ollama gemma4:e2b (xdev-sr)
       │
       ├─ web_search() ───────────────► SearXNG — searxng.local (xdev-sr)
-      ├─ search_documents() ─────────► Qdrant — qdrant.local (xdev-sr)
-      │                                    semantic chunk search
+      ├─ find_documents(query) ──────► Qdrant — qdrant.local (xdev-sr)
+      │                                    summary-vector search (limit 3)
+      ├─ load_document(id_or_title) ─► PostgreSQL `documents.full_text` (vlinux1)
       ├─ list_documents() ───────────► PostgreSQL `documents` (vlinux1)
       ├─ get_table_of_contents() ────► Ingestion GET /toc (vlinux2)
       ├─ get_document_summary(name) ─► PostgreSQL `documents` (vlinux1)
@@ -91,14 +92,17 @@ Ingestion — ingest.local (vlinux2)                       │
         │   return IngestResponse (fast)                 ▼
         ▼                                          Same _embed_and_summarize path
    Frontend polls GET /documents every 4s              │
-   until chunk_count > 0 (then summary renders)        ▼
+   until status != 'processing' (then summary renders)  ▼
 
-_embed_and_summarize:
-  SimpleDirectoryReader → SentenceSplitter (512/64)
-  → for each chunk: Ollama nomic-embed-text → Qdrant upsert
-    (payload includes document_id for filter-delete on re-ingest/delete)
+_embed_and_summarize (summary-routing, Phase 11):
+  SimpleDirectoryReader → join all extracted pieces into one full_text
   → first 2000 chars → Ollama gemma4:e2b /api/chat (think:false, num_ctx 2048, num_predict 150)
-  → UPDATE documents SET chunk_count, summary
+    (summary is REQUIRED — empty summary marks the row failed)
+  → Ollama nomic-embed-text on the summary → one 768-dim vector
+  → Qdrant upsert ONE point with payload {document_id, title, summary}
+    (one point per document; document_id stamped for filter-delete on re-ingest/delete)
+  → UPDATE documents SET full_text, summary, chunk_count=1
+  → _mark_complete (status → 'complete')
   → _regenerate_toc() → write atomic /data/documents/_TABLE_OF_CONTENTS.md
 
 Document delete (DELETE /ingest/documents/{id})
@@ -177,20 +181,22 @@ apply_link TEXT, found_date DATE
 
 **leetcode_queue** — `problem_slug PK, submitted_at, queued_at`
 
-**documents** — catalog rows for ingested files. Each row corresponds to one file on the PVC; `id` is stamped into every related Qdrant point's payload as `document_id`.
+**documents** — catalog rows for ingested files. Each row corresponds to one file on the PVC; `id` is stamped into every related Qdrant point's payload as `document_id`. Under summary-routing RAG (Phase 11) the relationship to Qdrant is 1:1 — one row, one summary vector.
 ```sql
 id          UUID PK DEFAULT gen_random_uuid(),
 filename    TEXT NOT NULL UNIQUE,   -- original upload filename
 title       TEXT NOT NULL,          -- filename stem
 doc_type    TEXT NOT NULL,          -- pdf, txt, md, docx, ...
 file_path   TEXT NOT NULL,          -- absolute path on /data/documents PVC
-summary     TEXT,                   -- gemma4:e2b one-paragraph summary
-chunk_count INTEGER NOT NULL DEFAULT 0,  -- 0 while still processing
+summary     TEXT,                   -- gemma4:e2b one-paragraph summary (retrieval key, REQUIRED for status='complete')
+full_text   TEXT,                   -- entire extracted document text, served by load_document tool
+chunk_count INTEGER NOT NULL DEFAULT 0,  -- vestigial post-Phase-11: 1 once complete, 0 while processing
 size_bytes  INTEGER NOT NULL DEFAULT 0,
+status      TEXT NOT NULL DEFAULT 'processing',  -- 'processing' | 'complete' | 'failed' (Phase 10)
 added_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
 Index on `(added_at DESC)`.
 
 ### Qdrant collections
 
-**documents** — vector store for chunked document text. Each point's payload carries `text`, `filename`, and `document_id` (the UUID of the catalog row). On re-ingest or row deletion, all points are removed by filter-match on `document_id`. Distinct from the Postgres table of the same name — they store fundamentally different things (chunks vs. catalog metadata).
+**documents** — vector store for document summaries (Phase 11). Each point carries one nomic-embed-text embedding of the document's gemma4:e2b summary, with payload `{document_id, title, summary}`. Exactly one point per catalog row. The agent's `find_documents` tool searches these summary vectors for routing; `load_document` then reads `documents.full_text` from Postgres to answer. Distinct from the Postgres table of the same name — they store different things (summary vectors with brief metadata vs. catalog rows with full text). On re-ingest or row deletion, the single point is removed by filter-match on `document_id`.
