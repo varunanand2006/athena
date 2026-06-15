@@ -4,7 +4,7 @@
 # first; only when src/ actually changes do we pay the real source compile.
 # That trick saves several minutes on iteration once Cargo.lock is in tree.
 
-FROM rust:1.82-slim-bookworm AS builder
+FROM rust:1-slim-bookworm AS builder
 
 WORKDIR /app
 
