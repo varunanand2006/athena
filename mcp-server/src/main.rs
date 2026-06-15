@@ -24,17 +24,19 @@
 //!     dispatches to the forwarder. Adding a tool does not touch it.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Result;
-use axum::{routing::get, Router};
+use axum::{middleware, routing::get, Router};
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod agent_client;
+mod auth;
 mod config;
 mod registry;
 mod server;
@@ -55,8 +57,15 @@ async fn main() -> Result<()> {
         bind_address = %cfg.bind_address,
         agent_base_url = %cfg.agent_base_url,
         allowed_hosts = ?cfg.allowed_hosts,
+        auth_enabled = cfg.auth_token.is_some(),
         "starting athena-mcp-server"
     );
+    if cfg.auth_token.is_none() {
+        warn!(
+            "MCP_AUTH_TOKEN is not set — bearer-token auth is unconfigured. \
+             The middleware will reject every /mcp request (fail-closed)."
+        );
+    }
 
     let tools = registry::registry();
     for t in &tools {
@@ -89,13 +98,16 @@ async fn main() -> Result<()> {
             .with_allowed_hosts(cfg.allowed_hosts.clone()),
     );
 
-    // Keep the /mcp route group in its own Router so a Phase 13 auth
-    // middleware can be applied with a single `.layer(...)` line —
-    // covering every MCP method uniformly without restructuring.
-    //
-    // PHASE 13: insert auth middleware here:
-    //   .layer(axum::middleware::from_fn(auth_middleware))
-    let mcp_routes = Router::new().nest_service("/mcp", mcp_service);
+    // Phase 13 auth: every request through /mcp is gated by a bearer-token
+    // check before it reaches rmcp. /healthz stays at the top level outside
+    // this Router so k8s probes are unaffected by auth state.
+    let auth_state = Arc::new(auth::AuthState::new(cfg.auth_token.clone()));
+    let mcp_routes = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(middleware::from_fn_with_state(
+            auth_state,
+            auth::auth_middleware,
+        ));
 
     let app = Router::new()
         .route("/healthz", get(healthz))

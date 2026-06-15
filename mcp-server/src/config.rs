@@ -18,6 +18,12 @@ pub struct Config {
     /// every request 403s with "Host header is not allowed". Phase 13's
     /// tunnel hostname will join this list without a recompile.
     pub allowed_hosts: Vec<String>,
+
+    /// Shared bearer token enforced by the Phase 13 auth middleware. `None`
+    /// means unconfigured: the middleware fails closed and rejects every
+    /// request with 401. There is intentionally no default — a missing token
+    /// must never silently mean "open to the internet".
+    pub auth_token: Option<String>,
 }
 
 impl Config {
@@ -35,6 +41,10 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
+            auth_token: env::var("MCP_AUTH_TOKEN")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         }
     }
 }

@@ -22,7 +22,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: mcp-server
-          image: athena-mcp-server:phase12
+          image: athena-mcp-server:phase13
           imagePullPolicy: Never
           ports:
             - containerPort: 8080
@@ -33,9 +33,18 @@ spec:
             - name: BIND_ADDRESS
               value: "0.0.0.0:8080"
             # rmcp's DNS-rebinding guard rejects any Host: not on this list.
-            # Add Phase 13's Cloudflare Tunnel hostname here when it lands.
+            # The Cloudflare Tunnel public hostname is appended in Phase 13
+            # Step 2 once the tunnel is provisioned.
             - name: ALLOWED_HOSTS
               value: "mcp.local,mcp.local:80,localhost,127.0.0.1,0.0.0.0"
+            # Phase 13: bearer token for the auth middleware. Sourced from a
+            # k8s Secret (not committed). Unset → middleware fails closed and
+            # rejects every /mcp request.
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-auth
+                  key: token
             - name: RUST_LOG
               value: "info,athena_mcp_server=debug"
           resources:

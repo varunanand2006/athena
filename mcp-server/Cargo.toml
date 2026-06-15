@@ -36,6 +36,11 @@ serde_json = "1"
 thiserror = "1"
 anyhow = "1"
 
+# Constant-time byte comparison for the bearer-token auth middleware. Tiny,
+# purpose-built crate — documents the intent (don't leak token bytes through a
+# timing side channel) better than a roll-your-own length-check + XOR fold.
+subtle = "2"
+
 # Structured logs.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
