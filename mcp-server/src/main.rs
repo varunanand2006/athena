@@ -54,6 +54,7 @@ async fn main() -> Result<()> {
     info!(
         bind_address = %cfg.bind_address,
         agent_base_url = %cfg.agent_base_url,
+        allowed_hosts = ?cfg.allowed_hosts,
         "starting athena-mcp-server"
     );
 
@@ -80,7 +81,12 @@ async fn main() -> Result<()> {
             move || Ok(server.clone())
         },
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
+        StreamableHttpServerConfig::default()
+            .with_cancellation_token(ct.child_token())
+            // Default allowlist is loopback-only; the ingress host (and any
+            // tunnel host added in Phase 13) must be added explicitly or
+            // rmcp returns 403 with "Host header is not allowed".
+            .with_allowed_hosts(cfg.allowed_hosts.clone()),
     );
 
     // Keep the /mcp route group in its own Router so a Phase 13 auth

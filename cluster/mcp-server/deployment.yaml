@@ -32,6 +32,10 @@ spec:
               value: "http://agent.athena.svc.cluster.local"
             - name: BIND_ADDRESS
               value: "0.0.0.0:8080"
+            # rmcp's DNS-rebinding guard rejects any Host: not on this list.
+            # Add Phase 13's Cloudflare Tunnel hostname here when it lands.
+            - name: ALLOWED_HOSTS
+              value: "mcp.local,mcp.local:80,localhost,127.0.0.1,0.0.0.0"
             - name: RUST_LOG
               value: "info,athena_mcp_server=debug"
           resources:
