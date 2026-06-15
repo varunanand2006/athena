@@ -12,6 +12,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 
+import memory as memory_vault
+
 _executor = ThreadPoolExecutor(max_workers=2)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
@@ -339,10 +341,67 @@ def get_document_summary(name: str) -> str:
     return f"{title}: {summary or '(no summary available)'}"
 
 
+# --- Memory vault tools (Phase 14) -----------------------------------------
+# Explicit capture only: write_memory is called ONLY when the user tells the
+# agent to remember something. Retrieval is title/tag string matching, no
+# embeddings this phase.
+
+
+@tool
+def write_memory(title: str, content: str, tags: list[str] | None = None) -> str:
+    """Save a memory note to the persistent memory vault. Call this ONLY when
+    the user explicitly asks you to remember/note/save something. `title` is a
+    short topic name (used as the note's identity), `content` is what to
+    remember, `tags` is an optional list of short keywords. If a note on the
+    same topic (same slugified title) already exists, this UPDATES it in place
+    instead of creating a duplicate."""
+    result = memory_vault.write_note(title, content, tags or [])
+    verb = "Updated existing" if result["action"] == "updated" else "Created"
+    tag_str = f" tags={result['tags']}" if result["tags"] else ""
+    return (
+        f"{verb} memory note '{result['title']}' "
+        f"({result['slug']}.md){tag_str}, updated {result['updated']}."
+    )
+
+
+@tool
+def list_memories() -> str:
+    """List every memory note in the vault with its title, tags, and last
+    updated date (newest first). Use this to see what is stored before
+    deciding which note to read in full."""
+    notes = memory_vault.list_notes()
+    if not notes:
+        return "The memory vault is empty."
+    lines = []
+    for n in notes:
+        tag_str = f" [{', '.join(n['tags'])}]" if n["tags"] else ""
+        lines.append(f"- {n['title']}{tag_str} (updated {n['updated']})")
+    return "\n".join(lines)
+
+
+@tool
+def search_memory(query: str) -> str:
+    """Search the memory vault for notes relevant to a query and return their
+    full content. Use this to recall something the user previously asked you to
+    remember. Matching is by title/tag keyword overlap (no embeddings). If
+    nothing matches, says so."""
+    hits = memory_vault.search_notes(query)
+    if not hits:
+        return f"No memory notes matched '{query}'."
+    blocks = []
+    for n in hits:
+        tag_str = f" [{', '.join(n['tags'])}]" if n["tags"] else ""
+        blocks.append(
+            f"### {n['title']}{tag_str} (updated {n['updated']})\n{n['body']}"
+        )
+    return "\n\n".join(blocks)
+
+
 SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
     "You have access to these tools: web_search, find_documents, load_document, "
-    "lookup_leetcode, list_documents, get_table_of_contents, and get_document_summary. "
+    "lookup_leetcode, list_documents, get_table_of_contents, get_document_summary, "
+    "write_memory, list_memories, and search_memory. "
     "For content questions about the user's own documents — background, resume, skills, "
     "projects, notes — follow this two-step flow: (1) call find_documents(query) to "
     "identify the relevant document(s) by summary similarity, then (2) call "
@@ -358,6 +417,14 @@ SYSTEM_PROMPT = (
     "patterns, or what to study next, you MUST call lookup_leetcode before answering. "
     "For questions about current events, job listings, prices, or recent news, "
     "you MUST call web_search before answering. "
+    "MEMORY: when the user explicitly tells you to remember, note, or save "
+    "something (\"remember that...\", \"make a note that...\", \"save this\"), you "
+    "MUST call write_memory with a short descriptive title and the content. Do "
+    "NOT call write_memory otherwise — never save memories on your own initiative "
+    "this phase. When a question might be answered by something the user asked you "
+    "to remember (e.g. \"what am I prepping for?\", \"what did I apply to?\"), call "
+    "search_memory (or list_memories first, then search) before answering, and "
+    "answer from the note's content. "
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
@@ -411,6 +478,9 @@ async def chat(req: ChatRequest):
                 list_documents,
                 get_table_of_contents,
                 get_document_summary,
+                write_memory,
+                list_memories,
+                search_memory,
             ],
             prompt=SYSTEM_PROMPT,
         )
