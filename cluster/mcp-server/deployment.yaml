@@ -22,7 +22,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: mcp-server
-          image: athena-mcp-server:phase13
+          image: athena-mcp-server:phase13-fix1
           imagePullPolicy: Never
           ports:
             - containerPort: 8080

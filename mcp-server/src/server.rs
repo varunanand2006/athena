@@ -24,7 +24,7 @@ use rmcp::{
     service::RequestContext,
     ErrorData, RoleServer, ServerHandler,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::{debug, error, warn};
 
 use crate::agent_client::AgentClient;
@@ -117,7 +117,20 @@ impl ServerHandler for AthenaServer {
         // filters). Treat absent as an empty object.
         let args = Value::Object(request.arguments.unwrap_or_default());
         match self.agent.call(tool, args).await {
-            Ok(value) => Ok(CallToolResult::structured(value)),
+            Ok(value) => {
+                // MCP requires `structuredContent` to be a JSON object, but
+                // agent endpoints are tool-agnostic JSON and may return a
+                // top-level array (e.g. find_documents returns a list of
+                // matches) or other non-object. Wrap any non-object under
+                // a generic `result` key so the response validates; object
+                // responses (load_document, lookup_leetcode) pass through
+                // unchanged. Kept tool-agnostic to preserve the thin proxy.
+                let structured = match value {
+                    Value::Object(_) => value,
+                    other => json!({ "result": other }),
+                };
+                Ok(CallToolResult::structured(structured))
+            }
             Err(e) => {
                 // Tool-level failure, not protocol-level: return an
                 // error CallToolResult so the MCP client / LLM can
