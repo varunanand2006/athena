@@ -15,12 +15,13 @@ spec:
       labels:
         app: cloudflared
     spec:
-      # Service-tier workload (not AI inference); vlinux2 carries other
-      # service pods (internship hunter, leetcode poller, ingestion,
-      # frontend). cloudflared just forwards traffic so resource cost is
-      # tiny — co-locating with services keeps xdev-sr free for Ollama.
+      # Pin to vlinux2 by hostname. The repo convention (CLAUDE.md "Pinning
+      # pods to vlinux2") is `kubernetes.io/hostname: vlinux2`, not a
+      # workload label — the `workload=services` label simply doesn't exist
+      # in this cluster. cloudflared just forwards traffic so the resource
+      # cost is tiny; placing it on vlinux2 keeps xdev-sr free for Ollama.
       nodeSelector:
-        workload: services
+        kubernetes.io/hostname: vlinux2
       enableServiceLinks: false
       containers:
         - name: cloudflared
