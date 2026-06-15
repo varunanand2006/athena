@@ -656,6 +656,21 @@ def list_documents_endpoint():
     ]
 
 
+@app.get("/memory")
+def memory_index():
+    """Frontmatter-only index of the memory vault for the /memory view."""
+    return memory_vault.list_notes()
+
+
+@app.get("/memory/{slug}")
+def memory_note(slug: str):
+    """Full content of one memory note (frontmatter fields + markdown body)."""
+    note = memory_vault.read_note(slug)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"No memory note '{slug}'.")
+    return note
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
