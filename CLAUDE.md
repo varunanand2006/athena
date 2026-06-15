@@ -47,7 +47,42 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 12 — Rust MCP server (LAN-only). A new in-cluster Rust binary
+Phase 14 — Agent Memory (substrate + explicit writes). Athena now has a
+persistent, human-viewable memory: a vault of markdown notes (an Obsidian
+vault) on a `local-path` PVC `agent-memory` mounted into the agent at
+`/data/memory`. The PVC lives on **xdev-sr**, the node the agent is
+pinned to (`workload: ai`) — deliberately a different node from the
+documents PVC on vlinux2, because `local-path` binds the PV to the node
+that first mounts it, so the memory PVC had to be created where the agent
+actually runs.
+
+Every note is a markdown file with YAML frontmatter (`title`, `created`,
+`updated`, `tags`) + a free-text body; filenames are the slugified title
+(`meta-interview-prep.md`), and **the slug is the note's identity** —
+same-title writes UPDATE in place rather than duplicating. Format +
+helpers live in `agent/memory.py`.
+
+Three agent tools (in `agent/main.py`, registered in the react agent):
+`write_memory(title, content, tags)` (create-or-update),
+`list_memories()` (frontmatter index), `search_memory(query)`
+(title/tag/slug keyword matching with light stemming — **no
+embeddings**). The system prompt enforces **explicit capture only**: the
+agent calls `write_memory` ONLY on an explicit "remember/note/save"
+instruction, never autonomously this phase. Recall questions trigger
+`search_memory`/`list_memories` before answering.
+
+The frontend has a read-only `/memory` view (note list → rendered
+markdown) backed by agent `GET /memory` (frontmatter index) and
+`GET /memory/{slug}` (full note); nginx proxies `/memory` to the agent.
+
+**Deferred (do NOT build until the relevant phase):** automatic capture
+(the agent recording memories without an explicit instruction) is
+**Phase 15** — a capture-*policy* problem planned in chat first;
+embedding-based retrieval is later, additive to the note format. See
+[phase 14 doc](docs/phases/phase-14-agent-memory.md) and
+[ADR 007](docs/adr/007-agent-memory-vault.md).
+
+### Earlier: Phase 12 — Rust MCP server (LAN-only). A new in-cluster Rust binary
 (`mcp-server/`) exposes Athena's three retrieval tools to Claude Code
 on the laptop over the MCP streamable HTTP transport. The server is a
 **thin proxy**: it holds no business logic. The agent now exposes
