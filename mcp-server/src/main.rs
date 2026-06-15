@@ -22,8 +22,11 @@ use axum::{routing::get, Router};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod agent_client;
 mod config;
+mod registry;
 
+use agent_client::AgentClient;
 use config::Config;
 
 #[tokio::main]
@@ -40,9 +43,24 @@ async fn main() -> Result<()> {
         "starting athena-mcp-server"
     );
 
-    // Router is intentionally tiny. Step 3 adds the registry; Step 4 mounts
-    // the rmcp StreamableHttpService at /mcp behind a middleware seam so
-    // Phase 13 auth can slot in without restructuring.
+    let tools = registry::registry();
+    for t in &tools {
+        info!(
+            tool = t.name,
+            capability = ?t.capability,
+            method = ?t.method,
+            agent_path = t.agent_path,
+            "registered tool"
+        );
+    }
+
+    // Constructed here so its connection pool is reused across requests.
+    // Step 4 hands this + the registry to the rmcp ServerHandler.
+    let _agent = AgentClient::new(cfg.agent_base_url.clone());
+
+    // Router is intentionally tiny. Step 4 mounts the rmcp
+    // StreamableHttpService at /mcp behind a middleware seam so Phase 13
+    // auth can slot in without restructuring.
     let app = Router::new().route("/healthz", get(healthz));
 
     let addr: SocketAddr = cfg.bind_address.parse()?;
