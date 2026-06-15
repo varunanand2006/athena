@@ -16,6 +16,12 @@ spec:
       nodeSelector:
         workload: ai
       enableServiceLinks: false
+      volumes:
+        # Memory vault (Phase 14). local-path PVC binds to xdev-sr,
+        # the node this deployment is pinned to via workload: ai.
+        - name: memory
+          persistentVolumeClaim:
+            claimName: agent-memory
       containers:
         - name: agent
           image: athena-agent:phase12
@@ -23,6 +29,9 @@ spec:
           ports:
             - containerPort: 8000
               name: http
+          volumeMounts:
+            - name: memory
+              mountPath: /data/memory
           env:
             - name: OLLAMA_BASE_URL
               value: "http://ollama.athena.svc.cluster.local:11434"

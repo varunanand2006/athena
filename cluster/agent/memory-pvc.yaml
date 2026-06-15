@@ -1,0 +1,31 @@
+# Memory vault PVC (Phase 14 — Agent Memory).
+#
+# This is the agent's persistent, human-viewable memory: a folder of
+# markdown notes (an Obsidian vault) mounted into the agent at
+# /data/memory. It must survive pod restarts.
+#
+# NODE PINNING — IMPORTANT:
+#   k3s `local-path` storage binds the PV to whichever node FIRST
+#   schedules a pod that mounts the claim. The agent Deployment is
+#   pinned to xdev-sr via `nodeSelector: workload: ai`, so this PVC
+#   binds to xdev-sr and co-locates with the agent pod.
+#
+#   This is deliberately DIFFERENT from the documents PVC
+#   (`ingestion-documents`), which lives on vlinux2 because the
+#   ingestion pod is pinned there. The agent and the documents PVC are
+#   on different nodes, so the memory PVC had to be created on the
+#   agent's node (xdev-sr), NOT alongside the documents PVC. As long as
+#   the agent stays pinned to `workload: ai` (xdev-sr), the PVC and pod
+#   always co-locate and we avoid a Pending pod.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-memory
+  namespace: athena
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
