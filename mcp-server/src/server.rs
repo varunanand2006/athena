@@ -94,6 +94,7 @@ impl ServerHandler for AthenaServer {
         Ok(ListToolsResult {
             tools,
             next_cursor: None,
+            meta: None,
         })
     }
 
@@ -111,7 +112,10 @@ impl ServerHandler for AthenaServer {
         };
 
         debug!(name = tool.name, "forwarding tools/call to agent");
-        let args = Value::Object(request.arguments);
+        // `arguments` is Option<JsonObject>: clients are permitted to omit
+        // it for tools with empty schemas (e.g. lookup_leetcode with no
+        // filters). Treat absent as an empty object.
+        let args = Value::Object(request.arguments.unwrap_or_default());
         match self.agent.call(tool, args).await {
             Ok(value) => Ok(CallToolResult::structured(value)),
             Err(e) => {
