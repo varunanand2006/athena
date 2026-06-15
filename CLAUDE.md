@@ -46,39 +46,41 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 11 — Summary-based RAG. Chunk-level retrieval is gone. The
-ingestion pipeline now produces **one Qdrant point per document** —
-its vector is the embedding of the gemma4:e2b-generated summary, not
-of any chunk. The full extracted document text is cached on the
-catalog row in a new `full_text TEXT` column so the agent can load
-whole documents back without re-parsing the file from the PVC.
-Retrieval at query time is a two-step routing flow:
+Phase 12 — Rust MCP server (LAN-only). A new in-cluster Rust binary
+(`mcp-server/`) exposes Athena's three retrieval tools to Claude Code
+on the laptop over the MCP streamable HTTP transport. The server is a
+**thin proxy**: it holds no business logic. The agent now exposes
+three direct-call JSON endpoints — `POST /tools/find_documents`,
+`POST /tools/load_document`, `POST /tools/lookup_leetcode` — that
+bypass the LLM reasoning loop and reuse the same `_impl` helpers the
+LangGraph `@tool` wrappers call. The Rust server translates MCP
+`tools/list` / `tools/call` into HTTP calls against those endpoints.
 
-1. `find_documents(query)` — embed the query via nomic-embed-text,
-   search the `documents` Qdrant collection (limit=3), return
-   `{document_id, title, summary, score}` for each hit. This picks
-   *which* document is relevant; it is not the answer.
-2. `load_document(id_or_title)` — return `title + full_text` from the
-   Postgres `documents.full_text` cache. The agent answers from this
-   full text, not from the summary.
+The server is extensibility-first by construction: a static
+`Vec<ToolDefinition>` in `mcp-server/src/registry.rs` plus one generic
+forwarder in `agent_client.rs`. Adding a tool is a DATA change —
+append one `ToolDefinition` + add the matching agent endpoint. Every
+`ToolDefinition` carries an explicit `capability: Read | Write` field
+from v1 (everything is `Read` today) — Phase 13's auth middleware
+gates on it. See [phase 12 doc](docs/phases/phase-12-mcp-server.md)
+and [ADR 005](docs/adr/005-mcp-thin-proxy.md).
 
-The old `search_documents` tool is removed. The system prompt forbids
-answering substantive content questions from the summary alone — load
-the full text first.
+**LAN-only constraint:** no auth in Phase 12. The server MUST NOT be
+exposed beyond the LAN (no Cloudflare Tunnel, no public ingress) until
+Phase 13 adds the auth middleware. The middleware seam is the
+`mcp_routes` `Router` in `mcp-server/src/main.rs` — Phase 13 plugs an
+`axum::middleware::from_fn(auth_middleware)` `.layer(...)` onto that
+group and gates uniformly on the capability field. Transport choice
+(streamable HTTP) is also Phase-13-aware: it's what the Cloudflare
+Tunnel will forward, so no transport rework. Laptop registration:
+`claude mcp add --transport http athena --scope user
+http://mcp.local/mcp`; `mcp.local` resolves to `192.168.96.200` via
+the laptop hosts file.
 
-Ingestion-side, `_embed_and_summarize` now: extracts full text via
-`SimpleDirectoryReader` and joins it into one string, generates the
-summary (now a **required** artifact — no summary means
-unretrievable, so empty summary is a hard `_mark_failed`), embeds the
-summary, upserts one Qdrant point with payload
-`{document_id, title, summary}`, then UPDATEs the row with
-`full_text + summary + chunk_count=1`. All Phase 10 reliability
-machinery is preserved: explicit `_mark_failed` at every early-return
-site, the outer `try/except` safety net, `_mark_complete` before
-`_regenerate_toc` (TOC failure stays cosmetic), and the 30-min reaper
-for rows orphaned by pod restarts. `chunk_count` is now vestigial
-(always 1 on `complete`, 0 while `processing`); `status` remains the
-source of truth.
+**Phase 11 context still applies:** retrieval is still summary-routing
++ full-document load. `find_documents` and `load_document` underneath
+the `/tools/*` endpoints are the same Phase 11 helpers. Empty summary
+is still a hard `_mark_failed` during ingest.
 
 **Phase 10 context still applies:** the `status` column (`processing |
 complete | failed`) drives the frontend Documents view (spinner /
@@ -88,11 +90,10 @@ endpoint + `/system` view are unchanged.
 
 **Phase 9 context still applies:** the Postgres `documents` table and
 the Qdrant `documents` collection remain different stores. They are
-now 1:1 (one catalog row = one Qdrant point) instead of 1:N (one row
-= many chunk points), but `document_id` is still stamped into each
-point's payload so re-ingest and row-delete continue to use
-delete-by-filter cleanly. Original files live on the 10Gi PVC at
-`/data/documents` on vlinux2; a `BackgroundScheduler` watches that
+1:1 (one catalog row = one Qdrant point), and `document_id` is still
+stamped into each point's payload so re-ingest and row-delete continue
+to use delete-by-filter cleanly. Original files live on the 10Gi PVC
+at `/data/documents` on vlinux2; a `BackgroundScheduler` watches that
 folder every 5 min for files dropped in directly.
 
 ## Coding conventions
