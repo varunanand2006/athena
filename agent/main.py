@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import psycopg2
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
@@ -65,13 +65,13 @@ def web_search(query: str) -> str:
     return "\n".join(lines)
 
 
-@tool
-def find_documents(query: str) -> str:
-    """Find which documents are relevant to a query by searching their summaries.
-    Returns up to 3 matching documents with their id, title, summary, and similarity score.
-    This is the *routing* step — it tells you which documents to read, not the answer.
-    After calling this, call load_document with one of the returned ids (or titles) to
-    read the full text and answer from real content."""
+# --- Shared tool implementations -------------------------------------------
+# These return structured data and are called by both the @tool wrappers
+# (which format to strings for the LLM) and the /tools/* HTTP endpoints
+# (which return JSON for the MCP server / other direct callers).
+
+
+def _find_documents_impl(query: str) -> list[dict]:
     with httpx.Client(timeout=30) as client:
         embed_resp = client.post(
             f"{OLLAMA_BASE_URL}/api/embeddings",
@@ -87,27 +87,19 @@ def find_documents(query: str) -> str:
         search_resp.raise_for_status()
         hits = search_resp.json().get("result", [])
 
-    if not hits:
-        return "No matching documents found."
-
-    blocks = []
+    results = []
     for hit in hits:
         payload = hit.get("payload", {})
-        title = payload.get("title", "(untitled)")
-        doc_id = payload.get("document_id", "")
-        summary = (payload.get("summary", "") or "").strip()
-        score = hit.get("score", 0)
-        blocks.append(f"[score={score:.2f}] {title} (id={doc_id})\n{summary}")
-    return "\n\n".join(blocks)
+        results.append({
+            "document_id": payload.get("document_id", ""),
+            "title": payload.get("title", "(untitled)"),
+            "summary": (payload.get("summary", "") or "").strip(),
+            "score": hit.get("score", 0),
+        })
+    return results
 
 
-@tool
-def load_document(identifier: str) -> str:
-    """Load a document's full text from the catalog, given its id (UUID) OR a
-    substring of its title/filename. Returns the title and the complete document
-    text. Use this AFTER find_documents to read the content needed to answer a
-    question — the summary returned by find_documents is for routing only, never
-    for substantive answers."""
+def _load_document_impl(identifier: str) -> dict | None:
     conn = pg_conn()
     try:
         with conn.cursor() as cur:
@@ -132,53 +124,150 @@ def load_document(identifier: str) -> str:
         conn.close()
 
     if not row:
-        return f"No document matching '{identifier}' was found."
+        return None
     title, full_text = row
-    if not full_text:
-        return f"{title}: (document has no cached full text)"
-    return f"{title}\n\n{full_text}"
+    return {"title": title, "full_text": full_text or ""}
+
+
+def _lookup_leetcode_impl(
+    difficulty: str | None = None,
+    since: str | None = None,
+    limit: int | None = None,
+) -> dict:
+    """Raw structured leetcode data for direct callers (MCP / API).
+
+    With no params: returns recent activity (default 15) + overall breakdown.
+    `difficulty` is case-insensitive (easy|medium|hard). `since` is YYYY-MM-DD.
+    Topic/pattern filtering is intentionally not done server-side — the caller
+    reasons over the returned `analysis` blobs.
+    """
+    where_clauses = []
+    params: list = []
+    if difficulty:
+        where_clauses.append("LOWER(p.difficulty) = LOWER(%s)")
+        params.append(difficulty)
+    if since:
+        where_clauses.append("p.solved_at >= %s")
+        params.append(since)
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    effective_limit = limit if (limit is not None and limit > 0) else 15
+
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT DISTINCT ON (p.slug)
+                    p.title, p.slug, p.difficulty, p.solved_at,
+                    a.analysis_text, a.analyzed_at
+                FROM leetcode_problems p
+                LEFT JOIN leetcode_analysis a ON a.problem_slug = p.slug
+                {where_sql}
+                ORDER BY p.slug, a.analyzed_at DESC NULLS LAST, p.solved_at DESC
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+            cur.execute(
+                "SELECT LOWER(difficulty), COUNT(*) FROM leetcode_problems GROUP BY LOWER(difficulty)"
+            )
+            breakdown_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    breakdown = {"easy": 0, "medium": 0, "hard": 0}
+    for diff, count in breakdown_rows:
+        if diff in breakdown:
+            breakdown[diff] = int(count)
+    breakdown["total"] = breakdown["easy"] + breakdown["medium"] + breakdown["hard"]
+
+    rows_sorted = sorted(rows, key=lambda r: r[3], reverse=True)[:effective_limit]
+    problems = []
+    for title, slug, diff, solved_at, analysis_text, analyzed_at in rows_sorted:
+        problems.append({
+            "title": title,
+            "slug": slug,
+            "difficulty": diff,
+            "solved_at": solved_at.isoformat() if solved_at else None,
+            "analysis": (
+                {
+                    "analysis_text": analysis_text,
+                    "analyzed_at": analyzed_at.isoformat() if analyzed_at else None,
+                }
+                if analysis_text else None
+            ),
+        })
+
+    return {
+        "breakdown": breakdown,
+        "problems": problems,
+        "filters": {
+            "difficulty": difficulty,
+            "since": since,
+            "limit": effective_limit,
+        },
+    }
+
+
+# --- LangGraph tool wrappers -----------------------------------------------
+
+
+@tool
+def find_documents(query: str) -> str:
+    """Find which documents are relevant to a query by searching their summaries.
+    Returns up to 3 matching documents with their id, title, summary, and similarity score.
+    This is the *routing* step — it tells you which documents to read, not the answer.
+    After calling this, call load_document with one of the returned ids (or titles) to
+    read the full text and answer from real content."""
+    hits = _find_documents_impl(query)
+    if not hits:
+        return "No matching documents found."
+    blocks = [
+        f"[score={h['score']:.2f}] {h['title']} (id={h['document_id']})\n{h['summary']}"
+        for h in hits
+    ]
+    return "\n\n".join(blocks)
+
+
+@tool
+def load_document(identifier: str) -> str:
+    """Load a document's full text from the catalog, given its id (UUID) OR a
+    substring of its title/filename. Returns the title and the complete document
+    text. Use this AFTER find_documents to read the content needed to answer a
+    question — the summary returned by find_documents is for routing only, never
+    for substantive answers."""
+    doc = _load_document_impl(identifier)
+    if doc is None:
+        return f"No document matching '{identifier}' was found."
+    if not doc["full_text"]:
+        return f"{doc['title']}: (document has no cached full text)"
+    return f"{doc['title']}\n\n{doc['full_text']}"
 
 
 @tool
 def lookup_leetcode(query: str) -> str:
     """Look up LeetCode activity from Postgres. Use for any question about solved problems,
     difficulty breakdown, weekly progress, patterns, or what to focus on next."""
-    conn = pg_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT ON (p.slug)
-                    p.title, p.difficulty, p.solved_at, a.analysis_text
-                FROM leetcode_problems p
-                LEFT JOIN leetcode_analysis a ON a.problem_slug = p.slug
-                ORDER BY p.slug, a.analyzed_at DESC NULLS LAST, p.solved_at DESC
-            """)
-            all_problems = cur.fetchall()
+    data = _lookup_leetcode_impl()
+    breakdown = data["breakdown"]
+    problems = data["problems"]
 
-            cur.execute("""
-                SELECT difficulty, COUNT(*) FROM leetcode_problems
-                GROUP BY difficulty ORDER BY difficulty
-            """)
-            breakdown = cur.fetchall()
-    finally:
-        conn.close()
-
-    if not all_problems:
+    if breakdown["total"] == 0:
         return "No LeetCode data in the database yet."
 
-    sorted_problems = sorted(all_problems, key=lambda r: r[2], reverse=True)
-    recent = sorted_problems[:15]
-
     lines = ["=== Difficulty breakdown ==="]
-    for diff, count in breakdown:
-        lines.append(f"  {diff}: {count}")
-    lines.append(f"  Total: {sum(c for _, c in breakdown)}")
+    for d in ("easy", "medium", "hard"):
+        lines.append(f"  {d}: {breakdown[d]}")
+    lines.append(f"  Total: {breakdown['total']}")
 
-    lines.append("\n=== 15 most recently solved ===")
-    for title, difficulty, solved_at, analysis in recent:
-        lines.append(f"- {title} ({difficulty}) — {solved_at.strftime('%Y-%m-%d')}")
-        if analysis:
-            lines.append(f"  Analysis: {analysis[:150]}")
+    lines.append(f"\n=== {len(problems)} most recently solved ===")
+    for p in problems:
+        solved = (p["solved_at"] or "")[:10]
+        lines.append(f"- {p['title']} ({p['difficulty']}) — {solved}")
+        if p["analysis"]:
+            lines.append(f"  Analysis: {p['analysis']['analysis_text'][:150]}")
 
     return "\n".join(lines)
 
@@ -500,6 +589,60 @@ def list_documents_endpoint():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+# --- Direct-call tool endpoints (Phase 12) ---------------------------------
+# These BYPASS the LLM reasoning loop and expose existing tool logic as JSON
+# for the Rust MCP server (and any other direct caller). All under /tools/
+# so a future auth / rate-limit middleware can be applied to the whole class.
+
+
+class FindDocumentsRequest(BaseModel):
+    query: str
+
+
+@app.post("/tools/find_documents")
+def tools_find_documents(req: FindDocumentsRequest):
+    try:
+        return _find_documents_impl(req.query)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class LoadDocumentRequest(BaseModel):
+    id_or_title: str
+
+
+@app.post("/tools/load_document")
+def tools_load_document(req: LoadDocumentRequest):
+    try:
+        doc = _load_document_impl(req.id_or_title)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if doc is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No document matching '{req.id_or_title}' was found.",
+        )
+    return doc
+
+
+class LookupLeetcodeRequest(BaseModel):
+    difficulty: str | None = Field(default=None, description="easy | medium | hard")
+    since: str | None = Field(default=None, description="YYYY-MM-DD")
+    limit: int | None = Field(default=None, ge=1, le=500)
+
+
+@app.post("/tools/lookup_leetcode")
+def tools_lookup_leetcode(req: LookupLeetcodeRequest):
+    try:
+        return _lookup_leetcode_impl(
+            difficulty=req.difficulty,
+            since=req.since,
+            limit=req.limit,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Reuse the env-configured URLs above so a deployment override (e.g. swapping
