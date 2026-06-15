@@ -18,7 +18,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: agent
-          image: athena-agent:latest
+          image: athena-agent:phase12
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
