@@ -1,33 +1,47 @@
-//! Athena MCP server — Phase 12 scaffold.
+//! Athena MCP server.
 //!
-//! This binary is a thin proxy: it speaks MCP (over streamable HTTP) to
-//! clients and plain HTTP to the agent service. It holds no business logic.
-//! The agent owns the real tool implementations behind /tools/* endpoints
-//! (added in Step 1); this server translates MCP tool calls into agent HTTP
-//! calls.
+//! This binary is a thin proxy: it speaks MCP (over the streamable
+//! HTTP transport) to clients and plain HTTP to the agent service. It
+//! holds no business logic. The agent owns the real tool
+//! implementations behind /tools/* endpoints; this server translates
+//! MCP `tools/list` / `tools/call` into agent HTTP calls.
 //!
-//! At this scaffold stage the server only boots, logs its configuration, and
-//! serves /healthz. The tool registry (Step 3) and MCP protocol surface
-//! (Step 4) land in subsequent commits — wiring them in must be additive,
-//! not require restructuring this file.
+//! ## Boundary: LAN-only in Phase 12
 //!
-//! LAN-only, no auth in Phase 12 — see CLAUDE.md. Phase 13 adds the auth
-//! middleware layer and the Cloudflare Tunnel; both gate on the read/write
-//! capability field carried by every ToolDefinition.
+//! There is NO auth in this phase. The server MUST NOT be exposed
+//! beyond the LAN until Phase 13 adds the auth middleware and the
+//! Cloudflare Tunnel. The middleware seam is the `.layer(...)` slot on
+//! the `/mcp` route group below — Phase 13 plugs in there and gates on
+//! the registry's read/write `Capability` field. The same gate is what
+//! lets us safely introduce write tools later.
+//!
+//! ## Architectural layers
+//!
+//!   - `registry`     — static `ToolDefinition` list (data, not code).
+//!   - `agent_client` — generic forwarder; one `call(&ToolDef, args)`
+//!     entry point, no per-tool branching.
+//!   - `server`       — MCP `ServerHandler` impl; reads the registry,
+//!     dispatches to the forwarder. Adding a tool does not touch it.
 
 use std::net::SocketAddr;
 
 use anyhow::Result;
 use axum::{routing::get, Router};
+use rmcp::transport::streamable_http_server::{
+    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod agent_client;
 mod config;
 mod registry;
+mod server;
 
 use agent_client::AgentClient;
 use config::Config;
+use server::AthenaServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,19 +68,43 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Constructed here so its connection pool is reused across requests.
-    // Step 4 hands this + the registry to the rmcp ServerHandler.
-    let _agent = AgentClient::new(cfg.agent_base_url.clone());
+    let agent = AgentClient::new(cfg.agent_base_url.clone());
+    let server = AthenaServer::new(agent, tools);
 
-    // Router is intentionally tiny. Step 4 mounts the rmcp
-    // StreamableHttpService at /mcp behind a middleware seam so Phase 13
-    // auth can slot in without restructuring.
-    let app = Router::new().route("/healthz", get(healthz));
+    let ct = CancellationToken::new();
+    let mcp_service = StreamableHttpService::new(
+        {
+            // The factory is called once per session by the SDK.
+            // `AthenaServer` is `Clone` and cheap to clone (Arc inside).
+            let server = server.clone();
+            move || Ok(server.clone())
+        },
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
+    );
+
+    // Keep the /mcp route group in its own Router so a Phase 13 auth
+    // middleware can be applied with a single `.layer(...)` line —
+    // covering every MCP method uniformly without restructuring.
+    //
+    // PHASE 13: insert auth middleware here:
+    //   .layer(axum::middleware::from_fn(auth_middleware))
+    let mcp_routes = Router::new().nest_service("/mcp", mcp_service);
+
+    let app = Router::new()
+        .route("/healthz", get(healthz))
+        .merge(mcp_routes);
 
     let addr: SocketAddr = cfg.bind_address.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(%addr, "listening");
-    axum::serve(listener, app).await?;
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            ct.cancel();
+        })
+        .await?;
     Ok(())
 }
 
