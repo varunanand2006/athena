@@ -33,10 +33,11 @@ spec:
             - name: BIND_ADDRESS
               value: "0.0.0.0:8080"
             # rmcp's DNS-rebinding guard rejects any Host: not on this list.
-            # The Cloudflare Tunnel public hostname is appended in Phase 13
-            # Step 2 once the tunnel is provisioned.
+            # `mcp.athenamcp.uk` is the Phase 13 Cloudflare Tunnel public
+            # hostname — Cloudflare forwards the original Host header to the
+            # origin, so the tunneled requests arrive with that value.
             - name: ALLOWED_HOSTS
-              value: "mcp.local,mcp.local:80,localhost,127.0.0.1,0.0.0.0"
+              value: "mcp.local,mcp.local:80,localhost,127.0.0.1,0.0.0.0,mcp.athenamcp.uk"
             # Phase 13: bearer token for the auth middleware. Sourced from a
             # k8s Secret (not committed). Unset → middleware fails closed and
             # rejects every /mcp request.

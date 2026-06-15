@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: athena
+  labels:
+    app: cloudflared
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      # Service-tier workload (not AI inference); vlinux2 carries other
+      # service pods (internship hunter, leetcode poller, ingestion,
+      # frontend). cloudflared just forwards traffic so resource cost is
+      # tiny — co-locating with services keeps xdev-sr free for Ollama.
+      nodeSelector:
+        workload: services
+      enableServiceLinks: false
+      containers:
+        - name: cloudflared
+          # Pinned tag (not :latest) — same convention as the rest of the
+          # cluster. Bump deliberately so the image-tag-workflow lesson
+          # carries forward; the pinned version was verified working as a
+          # connector against the Cloudflare control plane on 2026-06-15.
+          image: cloudflare/cloudflared:2026.6.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - tunnel
+            # Cloudflared self-updates by default, which would silently
+            # bypass our pinning. --no-autoupdate keeps the running version
+            # equal to the image tag.
+            - --no-autoupdate
+            # Bind the metrics/health endpoint so the kubelet probe has
+            # something to hit. cloudflared exposes /ready on this port.
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            # Long-lived connector token from the Cloudflare dashboard.
+            # Sourced from a k8s Secret (cluster/cloudflared/tunnel-secret.yaml,
+            # gitignored). Without this set, cloudflared exits immediately —
+            # the deployment will CrashLoop, which is fail-closed by accident.
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflared
+                  key: token
+          ports:
+            - name: metrics
+              containerPort: 2000
+          # cloudflared is a userland UDP/HTTP/2 forwarder — the workload is
+          # tiny. These limits are generous; in steady state it uses
+          # ~10-20 MB and almost no CPU.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 4
