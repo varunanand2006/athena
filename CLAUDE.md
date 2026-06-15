@@ -61,16 +61,24 @@ The server is extensibility-first by construction: a static
 forwarder in `agent_client.rs`. Adding a tool is a DATA change —
 append one `ToolDefinition` + add the matching agent endpoint. Every
 `ToolDefinition` carries an explicit `capability: Read | Write` field
-from v1 (everything is `Read` today) — Phase 13's auth middleware
-gates on it. See [phase 12 doc](docs/phases/phase-12-mcp-server.md)
-and [ADR 005](docs/adr/005-mcp-thin-proxy.md).
+from v1 (everything is `Read` today). The field is **carried but not
+yet enforced** — Phase 13's auth middleware is bearer-token
+*authentication* only; capability-based *authorization* will live in
+`call_tool` when the first write tool lands. See
+[phase 12 doc](docs/phases/phase-12-mcp-server.md),
+[ADR 005](docs/adr/005-mcp-thin-proxy.md), and
+[ADR 006](docs/adr/006-mcp-auth-granularity.md).
 
 **LAN-only constraint:** no auth in Phase 12. The server MUST NOT be
 exposed beyond the LAN (no Cloudflare Tunnel, no public ingress) until
 Phase 13 adds the auth middleware. The middleware seam is the
 `mcp_routes` `Router` in `mcp-server/src/main.rs` — Phase 13 plugs an
 `axum::middleware::from_fn(auth_middleware)` `.layer(...)` onto that
-group and gates uniformly on the capability field. Transport choice
+group. NOTE: this middleware gates on bearer-token authentication
+uniformly across all MCP methods — it does NOT gate on the capability
+field (the tool name lives in the JSON-RPC body, invisible at the HTTP
+layer). Read/write gating is deferred to `call_tool`; see
+[ADR 006](docs/adr/006-mcp-auth-granularity.md). Transport choice
 (streamable HTTP) is also Phase-13-aware: it's what the Cloudflare
 Tunnel will forward, so no transport rework. Laptop registration:
 `claude mcp add --transport http athena --scope user
@@ -130,8 +138,8 @@ folder every 5 min for files dropped in directly.
 - **App-level health aggregation** — a single endpoint that fan-outs to internal services with short per-check timeouts (2 s) via `httpx.AsyncClient` + `asyncio.gather`, so one dead dependency can't hang the whole view. Treat any non-5xx as "reachable" — a 404 on `/healthz` still proves the service answered a TCP request. Hardcode the self-check (the endpoint can't be answering if we're not reachable). Combine reachability with a Postgres data-snapshot query in the same response so the UI gets everything in one round-trip and can auto-refresh on a single interval.
 - **Match retrieval architecture to corpus shape** — chunk-level RAG is overkill for a small library of short, organized, text-only documents (class notes, resumes, project writeups). Replacing it with summary-level routing (one vector per document over its summary) plus full-document loading from Postgres on hit is cheaper at ingest (one embed + one upsert per doc instead of N) and gives the LLM strictly more context per hit (whole doc, not a 512-token chunk). Tradeoff: weak on very long documents (entire doc must fit in the LLM context), and the summary becomes a **required** ingest artifact because it IS the retrieval key — empty summary must be a hard `_mark_failed`, not a partial success.
 - **Agent two-step retrieval (route, then load)** — keep "find the right document" and "read its content" as separate tools (`find_documents` + `load_document`), not one fused "search" tool. The system prompt then says explicitly: never answer substantive content questions from the summary returned by the routing step — always call `load_document` on the top hit and answer from full text. Two clear tools the LLM can reason about beat one ambiguous tool whose output looks like an answer but isn't one.
-- **MCP server tool registry (Phase 12)** — the Rust MCP server is a thin proxy: each tool is a `ToolDefinition { name, description, input_schema, agent_path, method, capability }` in `mcp-server/src/registry.rs`, and one generic forwarder in `agent_client.rs` reads the registry and proxies the call to the agent's `/tools/*` endpoint. Adding a tool is a DATA change: append one `ToolDefinition` + add the matching agent `/tools/<name>` endpoint. No new handler function, no new match arm. The `capability: Read | Write` field exists on every tool from v1 even though everything is `Read` today — Phase 13's auth middleware gates on this field, so adding write tools later is data, not code. Same reason MCP uses streamable HTTP transport now: it's what Phase 13's Cloudflare Tunnel forwards, so no transport rework.
-- **MCP server is LAN-only in Phase 12** — there is NO auth on the MCP server until Phase 13 adds it. The server MUST NOT be exposed beyond the LAN (no Cloudflare Tunnel, no public ingress) before then. The middleware seam is the `mcp_routes` `Router` in `mcp-server/src/main.rs`: Phase 13 plugs an `axum::middleware::from_fn(auth_middleware)` `.layer(...)` onto that group, covering every MCP method uniformly and gating on the registry's read/write capability. That single gate guards both tunnel exposure AND any future write tools.
+- **MCP server tool registry (Phase 12)** — the Rust MCP server is a thin proxy: each tool is a `ToolDefinition { name, description, input_schema, agent_path, method, capability }` in `mcp-server/src/registry.rs`, and one generic forwarder in `agent_client.rs` reads the registry and proxies the call to the agent's `/tools/*` endpoint. Adding a tool is a DATA change: append one `ToolDefinition` + add the matching agent `/tools/<name>` endpoint. No new handler function, no new match arm. The `capability: Read | Write` field exists on every tool from v1 even though everything is `Read` today — it is **carried but not yet enforced** (Phase 13's auth middleware does bearer-token authentication only, not capability gating; see ADR 006). Adding a *read* tool stays data-only; the *first write tool* must also wire a capability check in `call_tool`. Same reason MCP uses streamable HTTP transport now: it's what Phase 13's Cloudflare Tunnel forwards, so no transport rework. One more: the proxy wraps any non-object agent response under a generic `result` key before `CallToolResult::structured` — MCP requires `structuredContent` to be a JSON object, but tools like `find_documents` return a top-level array; object responses pass through unchanged.
+- **MCP server is LAN-only in Phase 12** — there is NO auth on the MCP server until Phase 13 adds it. The server MUST NOT be exposed beyond the LAN (no Cloudflare Tunnel, no public ingress) before then. The middleware seam is the `mcp_routes` `Router` in `mcp-server/src/main.rs`: Phase 13 plugs an `axum::middleware::from_fn(auth_middleware)` `.layer(...)` onto that group, covering every MCP method uniformly with bearer-token authentication. NOTE: this gate does NOT distinguish read from write — the capability lives in the JSON-RPC body, invisible to HTTP middleware. It guards tunnel exposure for the current all-`Read` surface; gating *writes* differently from reads is deferred to a capability check in `call_tool` (ADR 006).
 
 ## What not to do
 - Don't suggest cloud-hosted alternatives to self-hosted components
