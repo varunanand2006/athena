@@ -275,7 +275,7 @@ export default function DocumentsView() {
                         <span className="inline-flex items-center gap-1.5">
                           <span
                             className="inline-block px-1.5 py-0.5 rounded text-xs font-medium"
-                            style={{ background: 'rgba(0,240,255,0.1)', color: 'var(--accent)' }}
+                            style={{ background: 'rgba(30,144,255,0.1)', color: 'var(--accent)' }}
                           >
                             Failed
                           </span>

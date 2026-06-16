@@ -182,7 +182,7 @@ export default function ChatView({
           <div className="flex justify-center">
             <div
               className="px-4 py-2.5 rounded-xl text-sm"
-              style={{ color: 'var(--accent)', background: 'rgba(0,240,255,0.1)', border: '1px solid var(--border)' }}
+              style={{ color: 'var(--accent)', background: 'rgba(30,144,255,0.1)', border: '1px solid var(--border)' }}
             >
               {error}
             </div>

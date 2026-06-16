@@ -213,7 +213,7 @@ export default function Sidebar({
                     background: isActive
                       ? 'var(--accent-light)'
                       : hoveredId === conv.id
-                      ? 'rgba(0,240,255,0.05)'
+                      ? 'rgba(30,144,255,0.05)'
                       : 'transparent',
                     borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
                   }}

@@ -195,7 +195,7 @@ export default function MemoryView() {
                 <button
                   onClick={() => deleteNote(selected.slug)}
                   className="px-2 py-1 rounded text-sm transition-colors hover:opacity-70"
-                  style={{ color: 'var(--accent)', background: 'rgba(0,240,255,0.1)' }}
+                  style={{ color: 'var(--accent)', background: 'rgba(30,144,255,0.1)' }}
                   title="Delete this note"
                 >
                   ✕
