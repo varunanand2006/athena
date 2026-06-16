@@ -1,7 +1,11 @@
 import asyncio
 import os
 import time
+import threading
+import logging
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 import httpx
 import psycopg2
@@ -11,10 +15,34 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import memory as memory_vault
+import reflection
+
+logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=2)
+_scheduler = BackgroundScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start background scheduler on app startup, shut down on exit."""
+    _scheduler.add_job(
+        _straggler_reflection_sweep,
+        "interval",
+        minutes=30,
+        id="reflection_straggler_sweep",
+    )
+    _scheduler.start()
+    logger.info("Started background scheduler (reflection straggler sweep)")
+    try:
+        yield
+    finally:
+        _scheduler.shutdown(wait=False)
+        logger.info("Stopped background scheduler")
+
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
 SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://searxng.athena.svc.cluster.local:80")
@@ -31,7 +59,7 @@ _PG_DSN = (
     f"/{os.getenv('POSTGRES_DB', 'athena')}"
 )
 
-app = FastAPI(title="Athena Agent")
+app = FastAPI(title="Athena Agent", lifespan=lifespan)
 
 
 def get_llm(mode: str):
@@ -440,10 +468,56 @@ class ChatResponse(BaseModel):
     conversation_id: str
 
 
+def _trigger_reflection_sweep(exclude_conversation_id: str):
+    """Trigger a reflection sweep on all due conversations (background task).
+
+    Excludes the conversation that just triggered this sweep, since it has no
+    content yet. Runs in a background thread so it never blocks the /chat handler.
+    """
+    try:
+        due_convs = reflection.get_due_conversations(exclude_ids=[exclude_conversation_id])
+        for conv in due_convs:
+            try:
+                logger.info(f"Reflecting on conversation {conv['id']}: {conv['title']}")
+                reflection.reflect_on_conversation(conv["id"], conv["title"])
+            except Exception as e:
+                logger.error(f"Reflection failed for {conv['id']}: {e}")
+    except Exception as e:
+        logger.error(f"Reflection sweep failed: {e}")
+
+
+def _straggler_reflection_sweep():
+    """Periodic job to catch conversations that weren't reflected by the boundary trigger.
+
+    Finds conversations that are DUE for reflection and whose last update was >15 min ago
+    (to avoid reflecting mid-conversation). Phase 15 Step 4.
+    """
+    try:
+        threshold = datetime.utcnow() - timedelta(minutes=15)
+        due_convs = reflection.get_due_conversations()
+
+        straggler_count = 0
+        for conv in due_convs:
+            updated_at = datetime.fromisoformat(conv["updated_at"]) if conv["updated_at"] else None
+            if updated_at and updated_at < threshold:
+                try:
+                    logger.info(f"Straggler sweep: reflecting on {conv['id']} ({conv['title']})")
+                    reflection.reflect_on_conversation(conv["id"], conv["title"])
+                    straggler_count += 1
+                except Exception as e:
+                    logger.error(f"Straggler sweep failed for {conv['id']}: {e}")
+
+        if straggler_count > 0:
+            logger.info(f"Straggler sweep: reflected {straggler_count} conversations")
+    except Exception as e:
+        logger.error(f"Straggler sweep failed: {e}")
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     try:
         conn = pg_conn()
+        is_new_conversation = False
         try:
             with conn.cursor() as cur:
                 if req.conversation_id is None:
@@ -453,6 +527,7 @@ async def chat(req: ChatRequest):
                         (title,),
                     )
                     conversation_id = str(cur.fetchone()[0])
+                    is_new_conversation = True
                     history = []
                 else:
                     conversation_id = req.conversation_id
@@ -510,6 +585,16 @@ async def chat(req: ChatRequest):
             conn.commit()
         finally:
             conn.close()
+
+        # Trigger reflection sweep on new conversation boundary (Phase 15).
+        # Runs in background so it never blocks the response.
+        if is_new_conversation:
+            thread = threading.Thread(
+                target=_trigger_reflection_sweep,
+                args=(conversation_id,),
+                daemon=True,
+            )
+            thread.start()
 
         return ChatResponse(response=response_text, conversation_id=conversation_id)
     except Exception as e:
@@ -669,6 +754,22 @@ def memory_note(slug: str):
     if note is None:
         raise HTTPException(status_code=404, detail=f"No memory note '{slug}'.")
     return note
+
+
+@app.delete("/memory/{slug}")
+def delete_memory_note(slug: str):
+    """Delete a memory note from the vault by slug."""
+    note = memory_vault.read_note(slug)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"No memory note '{slug}'.")
+
+    import os
+    path = os.path.join(memory_vault.MEMORY_DIR, f"{slug}.md")
+    try:
+        os.unlink(path)
+        return {"ok": True, "slug": slug, "deleted": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete note: {e}")
 
 
 @app.get("/healthz")

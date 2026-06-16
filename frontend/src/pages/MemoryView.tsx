@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import axios from 'axios'
 import ReactMarkdown from 'react-markdown'
 
-// Read-only view of the agent's memory vault (Phase 14). Writing happens
-// through chat ("remember that…"); this just surfaces what's accumulated.
+// View of the agent's memory vault (Phase 14+). Writing happens through chat
+// ("remember that…") or automatically (Phase 15); this view allows reading and
+// deletion, making the user the final authority over what's remembered.
 
 interface NoteMeta {
   slug: string
@@ -57,6 +58,17 @@ export default function MemoryView() {
       setLoadingNote(false)
     }
   }, [])
+
+  const deleteNote = useCallback(async (slug: string) => {
+    if (!confirm(`Delete memory note "${selected?.title}"?`)) return
+    try {
+      await axios.delete(`/memory/${slug}`, { timeout: 10_000 })
+      setSelected(null)
+      await fetchNotes()
+    } catch {
+      alert('Failed to delete note')
+    }
+  }, [selected?.title, fetchNotes])
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg)' }}>
@@ -150,10 +162,20 @@ export default function MemoryView() {
               className="rounded-2xl p-6 max-w-3xl"
               style={{ background: 'var(--card)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
             >
-              <h2 className="font-semibold text-lg" style={{ color: 'var(--text)' }}>
-                {selected.title}
-              </h2>
-              <div className="flex flex-wrap items-center gap-2 mt-2 mb-4">
+              <div className="flex items-start justify-between mb-3">
+                <h2 className="font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                  {selected.title}
+                </h2>
+                <button
+                  onClick={() => deleteNote(selected.slug)}
+                  className="px-2 py-1 rounded text-sm transition-colors hover:opacity-70"
+                  style={{ color: 'var(--text-muted)', background: 'rgba(255,0,0,0.1)' }}
+                  title="Delete this note"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 mb-4">
                 {selected.tags.map((t) => (
                   <span
                     key={t}
