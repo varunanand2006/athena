@@ -5,7 +5,7 @@ import threading
 import logging
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import psycopg2
@@ -383,7 +383,7 @@ def write_memory(title: str, content: str, tags: list[str] | None = None) -> str
     remember, `tags` is an optional list of short keywords. If a note on the
     same topic (same slugified title) already exists, this UPDATES it in place
     instead of creating a duplicate."""
-    result = memory_vault.write_note(title, content, tags or [])
+    result = memory_vault.write_note(title, content, tags or [], source="explicit")
     verb = "Updated existing" if result["action"] == "updated" else "Created"
     tag_str = f" tags={result['tags']}" if result["tags"] else ""
     return (
@@ -493,7 +493,10 @@ def _straggler_reflection_sweep():
     (to avoid reflecting mid-conversation). Phase 15 Step 4.
     """
     try:
-        threshold = datetime.utcnow() - timedelta(minutes=15)
+        # Postgres timestamptz -> timezone-AWARE datetime, so the threshold
+        # must be aware too (datetime.utcnow() is naive and would raise
+        # TypeError on the comparison below, crashing every sweep).
+        threshold = datetime.now(timezone.utc) - timedelta(minutes=15)
         due_convs = reflection.get_due_conversations()
 
         straggler_count = 0

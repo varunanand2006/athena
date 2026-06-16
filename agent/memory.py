@@ -14,6 +14,7 @@ by a free-text body:
     title: Meta interview prep
     created: 2026-06-15
     updated: 2026-06-15
+    source: explicit
     tags: [interview, meta]
     ---
 
@@ -23,6 +24,9 @@ Rules:
   * `title`   — the human-readable note title (required).
   * `created` — ISO date (YYYY-MM-DD) the note was first written.
   * `updated` — ISO date of the most recent write; bumped on every update.
+  * `source`  — "explicit" (user said "remember…") or "auto" (Phase 15
+                autonomous reflection). Records how the note ORIGINATED;
+                preserved across updates. Missing source -> "explicit".
   * `tags`    — a YAML list; may be empty (`tags: []`).
   * The body is everything after the closing `---`, free-form markdown.
 
@@ -83,7 +87,9 @@ def parse_note(text: str) -> tuple[dict, str]:
     Tolerant of missing frontmatter: if the file doesn't start with a
     `---` fence we treat the whole thing as the body with empty metadata.
     """
-    meta: dict = {"title": "", "created": "", "updated": "", "tags": []}
+    # `source` defaults to "explicit": any note written before Phase 15 (or
+    # with no source line) was, by definition, an explicit user-driven write.
+    meta: dict = {"title": "", "created": "", "updated": "", "source": "explicit", "tags": []}
     if not text.startswith("---"):
         return meta, text.strip()
 
@@ -112,12 +118,16 @@ def parse_note(text: str) -> tuple[dict, str]:
     return meta, body
 
 
-def _render_note(title: str, created: str, updated: str, tags: list[str], body: str) -> str:
+def _render_note(
+    title: str, created: str, updated: str, tags: list[str], body: str,
+    source: str = "explicit",
+) -> str:
     return (
         "---\n"
         f"title: {title}\n"
         f"created: {created}\n"
         f"updated: {updated}\n"
+        f"source: {source}\n"
         f"tags: {_format_tags(tags)}\n"
         "---\n\n"
         f"{body.strip()}\n"
@@ -137,6 +147,7 @@ def read_note(slug: str) -> dict | None:
         "title": meta["title"] or slug,
         "created": meta["created"],
         "updated": meta["updated"],
+        "source": meta["source"] or "explicit",
         "tags": meta["tags"],
         "body": body,
     }
@@ -161,15 +172,25 @@ def list_notes() -> list[dict]:
             "tags": note["tags"],
             "created": note["created"],
             "updated": note["updated"],
+            "source": note["source"],
         })
     notes.sort(key=lambda n: n["updated"], reverse=True)
     return notes
 
 
-def write_note(title: str, content: str, tags: list[str] | None = None) -> dict:
+def write_note(
+    title: str, content: str, tags: list[str] | None = None,
+    source: str = "explicit",
+) -> dict:
     """Create or UPDATE a note. If a note with the same slug exists, append
     the new content to its body and bump `updated` (and union the tags),
     rather than creating a duplicate file. Returns details of what happened.
+
+    `source` ("explicit" | "auto") records how the note ORIGINATED. On update
+    the existing note's source is PRESERVED — origin is a property of the first
+    write, so an auto-reflection touching a user-written note keeps it
+    "explicit" (and vice versa). This keeps the frontend's source badge honest
+    about whether the agent created a note on its own initiative.
     """
     os.makedirs(MEMORY_DIR, exist_ok=True)
     tags = tags or []
@@ -193,11 +214,13 @@ def write_note(title: str, content: str, tags: list[str] | None = None) -> dict:
         else:
             body = content.strip()
         title = existing["title"] or title
-        text = _render_note(title, created, today, merged_tags, body)
+        note_source = existing["source"] or "explicit"  # preserve origin
+        text = _render_note(title, created, today, merged_tags, body, note_source)
         final_tags = merged_tags
     else:
         action = "created"
-        text = _render_note(title, today, today, tags, content)
+        note_source = source
+        text = _render_note(title, today, today, tags, content, source)
         final_tags = tags
 
     tmp = path + ".tmp"
@@ -211,6 +234,7 @@ def write_note(title: str, content: str, tags: list[str] | None = None) -> dict:
         "title": title,
         "path": path,
         "tags": final_tags,
+        "source": note_source,
         "updated": today,
     }
 

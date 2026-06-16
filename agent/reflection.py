@@ -117,17 +117,47 @@ Return ONLY the JSON array, no other text."""
 
 
 def _parse_reflection_response(response_text: str) -> list[dict]:
-    """Parse the model's reflection response into a list of memory decisions."""
+    """Parse the model's reflection response into a list of memory decisions.
+
+    gemma4:e2b often ignores "JSON only" and wraps the array in markdown fences
+    or adds a sentence of preamble. We try a strict parse first, then fall back
+    to extracting the outermost [...] array from the surrounding noise. A failed
+    parse returns [] (capture nothing) rather than raising — a malformed
+    reflection must not crash the sweep.
+    """
     import json
     response_text = response_text.strip()
     if not response_text:
         return []
+
+    # Strip a leading/trailing markdown code fence if present.
+    if response_text.startswith("```"):
+        response_text = response_text.strip("`")
+        # drop an optional leading "json" language tag
+        if response_text.lstrip().lower().startswith("json"):
+            response_text = response_text.lstrip()[4:]
+        response_text = response_text.strip()
+
+    # Strict parse.
     try:
         decisions = json.loads(response_text)
         if isinstance(decisions, list):
             return decisions
     except json.JSONDecodeError:
-        logger.warning(f"Failed to parse reflection response as JSON: {response_text[:200]}")
+        pass
+
+    # Fallback: extract the outermost array from surrounding prose.
+    start = response_text.find("[")
+    end = response_text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        try:
+            decisions = json.loads(response_text[start:end + 1])
+            if isinstance(decisions, list):
+                return decisions
+        except json.JSONDecodeError:
+            pass
+
+    logger.warning(f"Failed to parse reflection response as JSON: {response_text[:200]}")
     return []
 
 
@@ -147,14 +177,18 @@ def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
         # Get existing memory index
         memory_index = _get_memory_index()
 
-        # Send to gemma4:e2b for reflection
+        # Send to gemma4:e2b for reflection. Unlike foreground chat, reflection
+        # is BACKGROUND (latency doesn't matter) and must emit a COMPLETE JSON
+        # array — so we trade CPU time for larger context (fit the whole short
+        # conversation + memory index) and output budget (avoid truncating the
+        # JSON, which would fail the parse and silently capture nothing).
         prompt = _reflection_prompt(messages, memory_index)
         llm = ChatOllama(
             base_url=OLLAMA_BASE_URL,
             model=OLLAMA_MODEL,
             temperature=0,
-            num_ctx=2048,
-            num_predict=150,
+            num_ctx=4096,
+            num_predict=512,
         )
         result = llm.invoke(prompt)
         response_text = result.content
@@ -175,10 +209,10 @@ def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
             if not title or not content:
                 continue
             try:
-                result = memory_vault.write_note(title, content, tags)
+                result = memory_vault.write_note(title, content, tags, source="auto")
                 logger.info(
                     f"  {'Updated' if result['action'] == 'updated' else 'Created'} "
-                    f"note '{result['title']}' ({result['slug']}.md)"
+                    f"note '{result['title']}' ({result['slug']}.md) [source={result['source']}]"
                 )
             except Exception as e:
                 logger.error(f"Failed to write memory '{title}': {e}")

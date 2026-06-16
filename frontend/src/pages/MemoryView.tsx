@@ -12,10 +12,30 @@ interface NoteMeta {
   tags: string[]
   created: string
   updated: string
+  source: string
 }
 
 interface Note extends NoteMeta {
   body: string
+}
+
+// Badge distinguishing autonomously-captured notes (Phase 15) from ones the
+// user explicitly asked to remember. Lets the user audit what the agent decided
+// on its own.
+function SourceBadge({ source }: { source: string }) {
+  const isAuto = source === 'auto'
+  return (
+    <span
+      className="inline-block px-1.5 py-0.5 rounded text-xs font-medium shrink-0"
+      style={{
+        background: isAuto ? 'rgba(245, 158, 11, 0.15)' : 'rgba(100, 116, 139, 0.12)',
+        color: isAuto ? '#b45309' : '#475569',
+      }}
+      title={isAuto ? 'Captured automatically by Athena' : 'You asked Athena to remember this'}
+    >
+      {isAuto ? 'auto' : 'you'}
+    </span>
+  )
 }
 
 function formatDate(s: string): string {
@@ -121,8 +141,11 @@ export default function MemoryView() {
                   borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
                 }}
               >
-                <div className="font-medium text-sm truncate" style={{ color: 'var(--text)' }}>
-                  {n.title}
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm truncate" style={{ color: 'var(--text)' }}>
+                    {n.title}
+                  </span>
+                  <SourceBadge source={n.source} />
                 </div>
                 {n.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1">
@@ -163,9 +186,12 @@ export default function MemoryView() {
               style={{ background: 'var(--card)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
             >
               <div className="flex items-start justify-between mb-3">
-                <h2 className="font-semibold text-lg" style={{ color: 'var(--text)' }}>
-                  {selected.title}
-                </h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                    {selected.title}
+                  </h2>
+                  <SourceBadge source={selected.source} />
+                </div>
                 <button
                   onClick={() => deleteNote(selected.slug)}
                   className="px-2 py-1 rounded text-sm transition-colors hover:opacity-70"
