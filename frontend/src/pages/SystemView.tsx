@@ -64,8 +64,8 @@ export default function SystemView() {
 function ServicesSection({ services }: { services: ServiceCheck[] }) {
   return (
     <section
-      className="rounded-2xl overflow-hidden"
-      style={{ background: 'var(--card)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
+      className="rounded-2xl overflow-hidden glass-card"
+      style={{ border: '1px solid var(--border)' }}
     >
       <div className="px-5 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
         <h2 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>Services</h2>
