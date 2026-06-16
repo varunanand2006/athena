@@ -236,36 +236,166 @@ function LeetCodeCard() {
   )
 }
 
-// ---- Recent activity card -------------------------------------------------
+// ---- Documents card ---------------------------------------------------------
 
-function ActivityCard({ messages }: { messages: Message[] }) {
-  const recent = messages
-    .filter((m) => m.role === 'user')
-    .slice(-10)
-    .reverse()
+interface Document {
+  id: string
+  filename: string
+  title: string
+  doc_type: string
+  summary: string
+  chunk_count: number
+  size_bytes: number
+  status: 'processing' | 'complete' | 'failed'
+  added_at: string | null
+}
+
+function DocumentsCard() {
+  const [data, setData] = useState<Document[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    axios
+      .get<Document[]>('/documents', { timeout: 10_000 })
+      .then((r) => setData(r.data))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false))
+  }, [])
 
   return (
-    <Card title="Recent Activity">
-      {recent.length === 0 ? (
+    <Card
+      title="Recent Documents"
+      badge={
+        !loading && !error ? (
+          <Pill color="indigo">{data.length} total</Pill>
+        ) : undefined
+      }
+    >
+      {loading && (
         <p className="text-sm py-4 text-center" style={{ color: 'var(--text-muted)' }}>
-          No recent messages — start a conversation first.
+          Loading…
         </p>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {recent.map((msg) => (
+      )}
+      {error && (
+        <p className="text-sm py-4 text-center" style={{ color: 'var(--accent)' }}>Failed to load documents</p>
+      )}
+      {!loading && !error && data.length === 0 && (
+        <p className="text-sm py-4 text-center" style={{ color: 'var(--text-muted)' }}>
+          No documents uploaded yet
+        </p>
+      )}
+      {!loading && !error && data.length > 0 && (
+        <div className="overflow-y-auto max-h-72 flex flex-col gap-2 pr-0.5">
+          {data.slice(0, 5).map((item) => (
             <div
-              key={msg.id}
-              className="flex items-center gap-3 px-3 py-2 rounded-xl cursor-default transition-colors hover:bg-[var(--accent-light)]"
+              key={item.id}
+              className="p-3 rounded-xl flex flex-col gap-1.5 glass-card"
+              style={{ border: '1px solid var(--border)' }}
             >
-              <span
-                className="text-xs shrink-0 tabular-nums"
-                style={{ color: 'var(--text-muted)', width: 38 }}
-              >
-                {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-              <span className="text-sm truncate" style={{ color: 'var(--text)' }}>
-                {msg.content.split('\n')[0].slice(0, 80)}
-              </span>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium text-sm truncate" style={{ color: 'var(--text)' }}>
+                    {item.title}
+                  </p>
+                  <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                    {item.filename} • {item.doc_type}
+                  </p>
+                </div>
+                {item.status === 'processing' && (
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: '#DBEAFE', color: '#1D4ED8' }}>
+                    Processing
+                  </span>
+                )}
+                {item.status === 'failed' && (
+                  <span className="text-xs font-medium text-red-500">Failed</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ---- Memory card ----------------------------------------------------------
+
+interface NoteMeta {
+  slug: string
+  title: string
+  tags: string[]
+  created: string
+  updated: string
+  source: string
+}
+
+function MemoryCard() {
+  const [data, setData] = useState<NoteMeta[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    axios
+      .get<NoteMeta[]>('/memory', { timeout: 10_000 })
+      .then((r) => setData(r.data))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false))
+  }, [])
+
+  return (
+    <Card
+      title="Memory Vault"
+      badge={
+        !loading && !error ? (
+          <Pill color="green">{data.length} notes</Pill>
+        ) : undefined
+      }
+    >
+      {loading && (
+        <p className="text-sm py-4 text-center" style={{ color: 'var(--text-muted)' }}>
+          Loading…
+        </p>
+      )}
+      {error && (
+        <p className="text-sm py-4 text-center" style={{ color: 'var(--accent)' }}>Failed to load memory vault</p>
+      )}
+      {!loading && !error && data.length === 0 && (
+        <p className="text-sm py-4 text-center" style={{ color: 'var(--text-muted)' }}>
+          No notes stored
+        </p>
+      )}
+      {!loading && !error && data.length > 0 && (
+        <div className="overflow-y-auto max-h-72 flex flex-col gap-2 pr-0.5">
+          {data.slice(0, 5).map((item) => (
+            <div
+              key={item.slug}
+              className="p-3 rounded-xl flex flex-col gap-1.5 glass-card"
+              style={{ border: '1px solid var(--border)' }}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium text-sm truncate" style={{ color: 'var(--text)' }}>
+                    {item.title}
+                  </p>
+                  {item.tags && item.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {item.tags.slice(0, 3).map((t) => (
+                        <span
+                          key={t}
+                          className="text-[10px] px-1.5 py-0.5 rounded-sm"
+                          style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>
+                  {new Date(item.updated).toLocaleDateString()}
+                </span>
+              </div>
             </div>
           ))}
         </div>
@@ -279,10 +409,11 @@ function ActivityCard({ messages }: { messages: Message[] }) {
 export default function DashboardView({ messages }: { messages: Message[] }) {
   return (
     <div className="h-full overflow-y-auto bg-transparent pt-8">
-      <div className="px-8 pb-8 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 items-start z-10">
+      <div className="px-8 pb-8 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start z-10">
         <InternshipCard />
         <LeetCodeCard />
-        <ActivityCard messages={messages} />
+        <DocumentsCard />
+        <MemoryCard />
       </div>
     </div>
   )

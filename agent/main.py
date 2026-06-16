@@ -56,6 +56,8 @@ INGESTION_URL = os.getenv("INGESTION_URL", "http://ingestion.athena.svc.cluster.
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://mcp-server.athena.svc.cluster.local")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://frontend.athena.svc.cluster.local")
 
 _PG_DSN = (
     f"postgresql://{os.getenv('POSTGRES_USER', 'athena')}"
@@ -850,7 +852,9 @@ def tools_lookup_leetcode(req: LookupLeetcodeRequest):
 # Reuse the env-configured URLs above so a deployment override (e.g. swapping
 # Ollama models in dev) is picked up here without a second source of truth.
 SYSTEM_HEALTH_CHECKS = [
+    ("frontend",  f"{FRONTEND_URL}/"),
     ("ingestion", f"{INGESTION_URL}/healthz"),
+    ("mcp-server",f"{MCP_SERVER_URL}/healthz"),
     ("ollama",    f"{OLLAMA_BASE_URL}/api/tags"),
     ("qdrant",    f"{QDRANT_URL}/healthz"),
     ("searxng",   f"{SEARXNG_BASE_URL}/healthz"),
@@ -874,6 +878,29 @@ async def _ping_service(client: httpx.AsyncClient, name: str, url: str) -> dict:
         return {"name": name, "reachable": False, "latency_ms": None}
 
 
+async def _ping_postgres() -> dict:
+    t0 = time.perf_counter()
+    loop = asyncio.get_event_loop()
+    def check():
+        conn = pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        finally:
+            conn.close()
+    
+    try:
+        # Run DB connection in a thread pool to avoid blocking async loop
+        await loop.run_in_executor(_executor, check)
+        return {
+            "name": "postgres",
+            "reachable": True,
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
+    except Exception:
+        return {"name": "postgres", "reachable": False, "latency_ms": None}
+
+
 @app.get("/system/health")
 async def system_health():
     """Aggregated reachability + data snapshot for the /system view.
@@ -884,8 +911,10 @@ async def system_health():
     """
     async with httpx.AsyncClient() as client:
         pinged = await asyncio.gather(
-            *[_ping_service(client, name, url) for name, url in SYSTEM_HEALTH_CHECKS]
+            *[_ping_service(client, name, url) for name, url in SYSTEM_HEALTH_CHECKS],
+            _ping_postgres()
         )
+
     services = [{"name": "agent", "reachable": True, "latency_ms": 0}, *pinged]
 
     conn = pg_conn()
