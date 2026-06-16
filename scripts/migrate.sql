@@ -134,3 +134,11 @@ UPDATE documents
 ALTER TABLE documents
     ADD COLUMN IF NOT EXISTS full_text TEXT;
 
+-- Phase 15: Automatic Memory Capture.
+-- Add a watermark to track which conversations have been reflected on.
+-- A conversation is DUE for reflection when reflected_at IS NULL OR updated_at > reflected_at.
+-- This makes re-opened-and-extended conversations automatically due again since their
+-- updated_at will move past the old reflected_at.
+ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS reflected_at TIMESTAMPTZ DEFAULT NULL;
+
