@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import axios from 'axios'
 import type { Message } from '../App'
-import { relativeTime } from '../utils/time'
 
 interface Conversation {
   id: string
