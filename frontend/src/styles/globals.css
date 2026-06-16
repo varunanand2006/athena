@@ -7,8 +7,8 @@
   --accent-light: rgba(30, 144, 255, 0.2);
   --accent-hover: #4DA6FF;
   --bg: #030303; /* Deep black core */
-  --bg-panel: rgba(10, 12, 16, 0.2); /* Highly translucent for glass */
-  --card: rgba(15, 20, 25, 0.15); /* Highly translucent for glass */
+  --bg-panel: rgba(10, 12, 16, 0.08); /* Barely visible tint for glass */
+  --card: rgba(15, 20, 25, 0.05); /* Barely visible tint for glass */
   --border: rgba(30, 144, 255, 0.4); /* Brighter blue border */
   --text: #F0F8FF; /* AliceBlue for high tech feel */
   --text-muted: #8AA4C8; /* Cool gray-blue */
@@ -22,15 +22,15 @@
 /* Glassmorphism classes */
 .glass-panel {
   background: var(--bg-panel);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.05), inset -1px -1px 0 rgba(255, 255, 255, 0.01);
 }
 
 .glass-card {
   background: var(--card);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.04), inset -1px -1px 0 rgba(255, 255, 255, 0.01);
 }
 
