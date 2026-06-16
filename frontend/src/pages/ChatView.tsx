@@ -107,12 +107,7 @@ export default function ChatView({
   }
 
   return (
-    <div className="flex flex-col h-full bg-transparent">
-      {/* Header - Floating text */}
-      <div className="px-8 py-6 shrink-0 bg-transparent flex flex-col items-start z-10">
-        <h1 className="font-bold text-3xl tracking-wide uppercase" style={{ color: 'var(--text)', textShadow: 'var(--glow)' }}>System Chat</h1>
-        <p className="text-sm mt-1 uppercase tracking-widest font-semibold" style={{ color: 'var(--text-muted)' }}>Athena Interaction Protocol</p>
-      </div>
+    <div className="flex flex-col h-full bg-transparent pt-6">
 
       {/* Message history */}
       <div className="flex-1 overflow-y-auto px-8 pb-4 space-y-6 scroll-smooth z-10">
@@ -147,7 +142,7 @@ export default function ChatView({
                         border: '1px solid rgba(30, 144, 255, 0.5)' 
                       }
                     : {
-                        boxShadow: '0 10px 30px rgba(0,0,0,0.5), inset 1px 1px 0 rgba(255,255,255,0.05)',
+                        boxShadow: '0 5px 15px rgba(0,0,0,0.5), inset 1px 1px 0 rgba(255,255,255,0.05)',
                         border: '1px solid rgba(255,255,255,0.1)',
                         borderTop: '1px solid rgba(255,255,255,0.2)',
                         borderLeft: '1px solid rgba(255,255,255,0.15)',
@@ -174,7 +169,7 @@ export default function ChatView({
             <div
               className="rounded-3xl rounded-bl-sm glass-card"
               style={{
-                boxShadow: '0 10px 30px rgba(0,0,0,0.5), inset 1px 1px 0 rgba(255,255,255,0.05)',
+                boxShadow: '0 5px 15px rgba(0,0,0,0.5), inset 1px 1px 0 rgba(255,255,255,0.05)',
                 border: '1px solid rgba(255,255,255,0.1)',
                 borderTop: '1px solid rgba(255,255,255,0.2)',
                 borderLeft: '1px solid rgba(255,255,255,0.15)',
@@ -202,7 +197,7 @@ export default function ChatView({
       {/* Floating Input bar */}
       <div className="px-6 pb-6 pt-2 shrink-0 bg-transparent flex justify-center z-20">
         <div
-          className="flex items-end gap-3 rounded-[2rem] px-6 py-4 transition-all duration-300 glass-panel max-w-4xl w-full"
+          className="flex items-center gap-3 rounded-[2rem] px-6 py-4 transition-all duration-300 glass-panel max-w-4xl w-full"
           style={{ 
             border: '1px solid rgba(255,255,255,0.1)', 
             borderTop: '1px solid rgba(255,255,255,0.2)',

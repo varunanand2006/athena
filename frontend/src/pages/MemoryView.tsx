@@ -91,13 +91,7 @@ export default function MemoryView() {
   }, [selected?.title, fetchNotes])
 
   return (
-    <div className="h-full flex flex-col bg-transparent">
-      <div className="px-8 py-6 shrink-0 bg-transparent flex flex-col items-start z-10">
-        <h1 className="font-bold text-3xl tracking-wide uppercase" style={{ color: 'var(--text)', textShadow: 'var(--glow)' }}>Memory</h1>
-        <p className="text-sm mt-1 uppercase tracking-widest font-semibold" style={{ color: 'var(--text-muted)' }}>
-          Long-term Storage
-        </p>
-      </div>
+    <div className="h-full flex flex-col bg-transparent pt-8">
       <div className="flex-1 flex overflow-hidden px-8 pb-8 gap-6 z-10">
         {/* Note list */}
         <div

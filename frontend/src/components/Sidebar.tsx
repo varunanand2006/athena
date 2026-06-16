@@ -114,10 +114,10 @@ export default function Sidebar({
       <div className={`px-4 pt-5 pb-4 flex flex-col ${isCollapsed ? 'items-center' : ''}`} style={{ borderBottom: '1px solid var(--border)' }}>
         <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} mb-3`}>
           <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0 glow-pulse"
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 glow-pulse"
             style={{ background: 'var(--accent)', boxShadow: 'var(--glow)' }}
           >
-            A
+            <IconAthena />
           </div>
           {!isCollapsed && <span className="font-bold text-lg tracking-widest" style={{ color: 'var(--text)', textShadow: 'var(--glow)', textTransform: 'uppercase' }}>Athena</span>}
         </div>
@@ -368,6 +368,16 @@ function IconCollapse() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="11 17 6 12 11 7"></polyline>
       <polyline points="18 17 13 12 18 7"></polyline>
+    </svg>
+  )
+}
+
+function IconAthena() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+      <path d="M2 17l10 5 10-5" />
+      <path d="M2 12l10 5 10-5" />
     </svg>
   )
 }

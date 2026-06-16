@@ -7,8 +7,8 @@
   --accent-light: rgba(30, 144, 255, 0.2);
   --accent-hover: #4DA6FF;
   --bg: #030303; /* Deep black core */
-  --bg-panel: rgba(10, 12, 16, 0.45); /* Highly translucent for glass */
-  --card: rgba(15, 20, 25, 0.3); /* Highly translucent for glass */
+  --bg-panel: rgba(10, 12, 16, 0.2); /* Highly translucent for glass */
+  --card: rgba(15, 20, 25, 0.15); /* Highly translucent for glass */
   --border: rgba(30, 144, 255, 0.4); /* Brighter blue border */
   --text: #F0F8FF; /* AliceBlue for high tech feel */
   --text-muted: #8AA4C8; /* Cool gray-blue */

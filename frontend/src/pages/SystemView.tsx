@@ -41,13 +41,7 @@ export default function SystemView() {
   }, [fetchHealth])
 
   return (
-    <div className="h-full overflow-y-auto bg-transparent">
-      <div className="px-8 py-6 shrink-0 bg-transparent flex flex-col items-start z-10">
-        <h1 className="font-bold text-3xl tracking-wide uppercase" style={{ color: 'var(--text)', textShadow: 'var(--glow)' }}>System</h1>
-        <p className="text-sm mt-1 uppercase tracking-widest font-semibold" style={{ color: 'var(--text-muted)' }}>
-          Core Diagnostics
-        </p>
-      </div>
+    <div className="h-full overflow-y-auto bg-transparent pt-8">
       <div className="px-8 pb-8 flex flex-col gap-6 z-10">
         {loading && !health && (
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading…</p>
