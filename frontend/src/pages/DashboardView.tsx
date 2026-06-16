@@ -100,7 +100,7 @@ function InternshipCard() {
         </p>
       )}
       {error && (
-        <p className="text-sm py-4 text-center text-red-500">Failed to load internships</p>
+        <p className="text-sm py-4 text-center" style={{ color: 'var(--accent)' }}>Failed to load internships</p>
       )}
       {!loading && !error && data.length === 0 && (
         <p className="text-sm py-4 text-center" style={{ color: 'var(--text-muted)' }}>
@@ -188,7 +188,7 @@ function LeetCodeCard() {
         </p>
       )}
       {error && (
-        <p className="text-sm py-4 text-center text-red-500">Failed to load LeetCode stats</p>
+        <p className="text-sm py-4 text-center" style={{ color: 'var(--accent)' }}>Failed to load LeetCode stats</p>
       )}
       {!loading && !error && data && (
         <>
@@ -255,7 +255,7 @@ function ActivityCard({ messages }: { messages: Message[] }) {
           {recent.map((msg) => (
             <div
               key={msg.id}
-              className="flex items-center gap-3 px-3 py-2 rounded-xl cursor-default transition-colors hover:bg-gray-50"
+              className="flex items-center gap-3 px-3 py-2 rounded-xl cursor-default transition-colors hover:bg-[var(--accent-light)]"
             >
               <span
                 className="text-xs shrink-0 tabular-nums"
@@ -279,7 +279,7 @@ function ActivityCard({ messages }: { messages: Message[] }) {
 export default function DashboardView({ messages }: { messages: Message[] }) {
   return (
     <div className="h-full overflow-y-auto" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 bg-white shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>Dashboard</h1>
         <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
           Pipeline overview

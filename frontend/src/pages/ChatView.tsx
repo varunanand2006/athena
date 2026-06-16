@@ -109,7 +109,7 @@ export default function ChatView({
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--bg)' }}>
       {/* Header */}
-      <div className="px-6 py-4 bg-white shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>Chat</h1>
         <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Ask Athena anything</p>
       </div>
@@ -181,8 +181,8 @@ export default function ChatView({
         {error && (
           <div className="flex justify-center">
             <div
-              className="px-4 py-2.5 rounded-xl text-sm text-red-700"
-              style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}
+              className="px-4 py-2.5 rounded-xl text-sm"
+              style={{ color: 'var(--accent)', background: 'rgba(0,240,255,0.1)', border: '1px solid var(--border)' }}
             >
               {error}
             </div>
@@ -193,7 +193,7 @@ export default function ChatView({
       </div>
 
       {/* Input bar */}
-      <div className="px-6 py-4 bg-white shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderTop: '1px solid var(--border)' }}>
         <div
           className="flex items-end gap-3 rounded-2xl px-4 py-3 transition-colors"
           style={{ background: 'var(--bg)', border: '1.5px solid var(--border)' }}

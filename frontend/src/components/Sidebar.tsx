@@ -101,25 +101,25 @@ export default function Sidebar({
   return (
     <aside
       className="w-56 shrink-0 flex flex-col h-full"
-      style={{ background: '#1E1B4B', borderRight: '1px solid rgba(255,255,255,0.07)' }}
+      style={{ background: 'var(--bg-panel)', borderRight: '1px solid var(--border)' }}
     >
       {/* Logo */}
-      <div className="px-5 pt-5 pb-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+      <div className="px-5 pt-5 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex items-center gap-2.5 mb-3">
           <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0"
-            style={{ background: 'var(--accent)' }}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-black font-bold text-sm shrink-0"
+            style={{ background: 'var(--accent)', boxShadow: 'var(--glow)' }}
           >
             A
           </div>
-          <span className="text-white font-semibold text-base tracking-tight">Athena</span>
+          <span className="font-semibold text-base tracking-tight" style={{ color: 'var(--accent)', textShadow: 'var(--glow)', textTransform: 'uppercase' }}>Athena</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: statusColor, boxShadow: `0 0 6px ${statusColor}80` }}
           />
-          <span className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
             {statusLabel}
           </span>
         </div>
@@ -132,10 +132,10 @@ export default function Sidebar({
           end
           className={({ isActive }) =>
             `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-              isActive ? 'text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/5'
+              isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--accent-light)]'
             }`
           }
-          style={({ isActive }) => (isActive ? { background: 'var(--accent)' } : {})}
+          style={({ isActive }) => (isActive ? { background: 'var(--accent-light)', color: 'var(--accent)', boxShadow: 'inset 2px 0 0 var(--accent)' } : {})}
         >
           <IconChat />
           Chat
@@ -144,10 +144,10 @@ export default function Sidebar({
           to="/dashboard"
           className={({ isActive }) =>
             `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-              isActive ? 'text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/5'
+              isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--accent-light)]'
             }`
           }
-          style={({ isActive }) => (isActive ? { background: 'var(--accent)' } : {})}
+          style={({ isActive }) => (isActive ? { background: 'var(--accent-light)', color: 'var(--accent)', boxShadow: 'inset 2px 0 0 var(--accent)' } : {})}
         >
           <IconDashboard />
           Dashboard
@@ -156,10 +156,10 @@ export default function Sidebar({
           to="/documents"
           className={({ isActive }) =>
             `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-              isActive ? 'text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/5'
+              isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--accent-light)]'
             }`
           }
-          style={({ isActive }) => (isActive ? { background: 'var(--accent)' } : {})}
+          style={({ isActive }) => (isActive ? { background: 'var(--accent-light)', color: 'var(--accent)', boxShadow: 'inset 2px 0 0 var(--accent)' } : {})}
         >
           <IconDocuments />
           Documents
@@ -168,10 +168,10 @@ export default function Sidebar({
           to="/memory"
           className={({ isActive }) =>
             `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-              isActive ? 'text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/5'
+              isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--accent-light)]'
             }`
           }
-          style={({ isActive }) => (isActive ? { background: 'var(--accent)' } : {})}
+          style={({ isActive }) => (isActive ? { background: 'var(--accent-light)', color: 'var(--accent)', boxShadow: 'inset 2px 0 0 var(--accent)' } : {})}
         >
           <IconMemory />
           Memory
@@ -180,10 +180,10 @@ export default function Sidebar({
           to="/system"
           className={({ isActive }) =>
             `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-              isActive ? 'text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/5'
+              isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--accent-light)]'
             }`
           }
-          style={({ isActive }) => (isActive ? { background: 'var(--accent)' } : {})}
+          style={({ isActive }) => (isActive ? { background: 'var(--accent-light)', color: 'var(--accent)', boxShadow: 'inset 2px 0 0 var(--accent)' } : {})}
         >
           <IconSystem />
           System
@@ -196,7 +196,7 @@ export default function Sidebar({
           <>
             <p
               className="text-xs font-medium px-3 pb-1.5 uppercase tracking-wider"
-              style={{ color: 'rgba(255,255,255,0.3)' }}
+              style={{ color: 'var(--text-muted)' }}
             >
               Recent
             </p>
@@ -211,9 +211,9 @@ export default function Sidebar({
                   className="group flex items-center justify-between gap-1 px-3 py-2 rounded-lg cursor-pointer transition-all mb-0.5"
                   style={{
                     background: isActive
-                      ? 'rgba(99,102,241,0.25)'
+                      ? 'var(--accent-light)'
                       : hoveredId === conv.id
-                      ? 'rgba(255,255,255,0.05)'
+                      ? 'rgba(0,240,255,0.05)'
                       : 'transparent',
                     borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
                   }}
@@ -221,11 +221,11 @@ export default function Sidebar({
                   <div className="flex-1 min-w-0">
                     <p
                       className="text-xs font-medium truncate"
-                      style={{ color: isActive ? '#fff' : 'rgba(255,255,255,0.7)' }}
+                      style={{ color: isActive ? 'var(--accent)' : 'var(--text)' }}
                     >
                       {conv.title}
                     </p>
-                    <p className="text-xs" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                       {relativeTime(conv.updated_at)}
                     </p>
                   </div>
@@ -247,10 +247,10 @@ export default function Sidebar({
       </div>
 
       {/* New conversation */}
-      <div className="px-3 pb-4" style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: '12px' }}>
+      <div className="px-3 pb-4" style={{ borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
         <button
           onClick={onNewConversation}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-white/55 hover:text-white/85 hover:bg-white/5 transition-all"
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--accent-light)] transition-all"
         >
           <IconPlus />
           New conversation

@@ -139,7 +139,7 @@ export default function DocumentsView() {
 
   return (
     <div className="h-full overflow-y-auto" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 bg-white shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
           Documents
         </h1>
@@ -197,7 +197,7 @@ export default function DocumentsView() {
           </div>
         )}
         {uploadError && (
-          <p className="text-sm text-red-500">{uploadError}</p>
+          <p className="text-sm" style={{ color: 'var(--accent)' }}>{uploadError}</p>
         )}
 
         {/* Catalog table */}
@@ -220,7 +220,7 @@ export default function DocumentsView() {
             </p>
           )}
           {error && (
-            <p className="text-sm py-8 text-center text-red-500">Failed to load documents</p>
+            <p className="text-sm py-8 text-center" style={{ color: 'var(--accent)' }}>Failed to load documents</p>
           )}
           {!loading && !error && docs.length === 0 && (
             <p className="text-sm py-8 text-center" style={{ color: 'var(--text-muted)' }}>
@@ -275,7 +275,7 @@ export default function DocumentsView() {
                         <span className="inline-flex items-center gap-1.5">
                           <span
                             className="inline-block px-1.5 py-0.5 rounded text-xs font-medium"
-                            style={{ background: '#FEE2E2', color: '#B91C1C' }}
+                            style={{ background: 'rgba(0,240,255,0.1)', color: 'var(--accent)' }}
                           >
                             Failed
                           </span>
@@ -293,8 +293,8 @@ export default function DocumentsView() {
                         onClick={() => onDelete(d)}
                         disabled={deletingId === d.id}
                         title={d.status === 'failed' ? 'Delete and re-upload to retry' : 'Delete document'}
-                        className="p-1.5 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
-                        style={{ color: '#DC2626' }}
+                        className="p-1.5 rounded transition-colors disabled:opacity-50 hover:bg-[var(--accent-light)]"
+                        style={{ color: 'var(--accent)' }}
                       >
                         {deletingId === d.id ? <Spinner /> : <IconTrash />}
                       </button>

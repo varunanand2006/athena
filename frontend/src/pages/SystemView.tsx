@@ -42,7 +42,7 @@ export default function SystemView() {
 
   return (
     <div className="h-full overflow-y-auto" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 bg-white shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
           System
         </h1>
@@ -122,7 +122,7 @@ function DataSection({ data }: { data: SystemHealth['data'] }) {
           <div className="text-xs flex gap-3" style={{ color: 'var(--text-muted)' }}>
             <span>complete: {complete}</span>
             <span>processing: {processing}</span>
-            <span style={{ color: failed > 0 ? '#DC2626' : 'var(--text-muted)' }}>
+            <span style={{ color: failed > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
               failed: {failed}
             </span>
           </div>
