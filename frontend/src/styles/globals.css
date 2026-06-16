@@ -4,17 +4,19 @@
 
 :root {
   --accent: #1E90FF; /* Pure tech blue */
-  --accent-light: rgba(30, 144, 255, 0.15);
+  --accent-light: rgba(30, 144, 255, 0.2);
   --accent-hover: #4DA6FF;
-  --bg: #0D0D0D; /* Very dark background */
-  --bg-panel: #111111; /* Slightly lighter for panels */
-  --card: rgba(20, 20, 20, 0.85); /* Dark grey glass */
-  --border: rgba(30, 144, 255, 0.25); /* Subtle blue border */
-  --text: #F3F4F6; /* Highly readable off-white */
-  --text-muted: #9CA3AF; /* Standard readable gray */
-  --shadow: 0 0 5px rgba(30, 144, 255, 0.05);
-  --shadow-md: 0 0 8px rgba(30, 144, 255, 0.1);
-  --glow: 0 0 4px rgba(30, 144, 255, 0.3); /* Subtle glow */
+  --bg: #050505; /* Deep black core */
+  --bg-panel: rgba(10, 12, 16, 0.85); /* Glassy panel */
+  --card: rgba(15, 20, 25, 0.7); /* Translucent cards */
+  --border: rgba(30, 144, 255, 0.4); /* Brighter blue border */
+  --text: #F0F8FF; /* AliceBlue for high tech feel */
+  --text-muted: #8AA4C8; /* Cool gray-blue */
+  
+  /* Complex glowing shadows for depth */
+  --shadow: 0 0 10px rgba(30, 144, 255, 0.15), inset 0 0 15px rgba(30, 144, 255, 0.05);
+  --shadow-md: 0 0 20px rgba(30, 144, 255, 0.2), inset 0 0 30px rgba(30, 144, 255, 0.1);
+  --glow: 0 0 10px rgba(30, 144, 255, 0.6), 0 0 20px rgba(30, 144, 255, 0.3);
 }
 
 * {
@@ -24,10 +26,13 @@
 body {
   font-family: 'Rajdhani', system-ui, sans-serif;
   background-color: var(--bg);
+  /* Radial vignette + grid for classic HUD background */
   background-image: 
-    linear-gradient(rgba(30, 144, 255, 0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(30, 144, 255, 0.02) 1px, transparent 1px);
-  background-size: 30px 30px;
+    radial-gradient(circle at center, rgba(30, 144, 255, 0.08) 0%, transparent 70%),
+    linear-gradient(rgba(30, 144, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 144, 255, 0.05) 1px, transparent 1px);
+  background-size: 100% 100%, 40px 40px, 40px 40px;
+  background-attachment: fixed;
   color: var(--text);
   margin: 0;
   padding: 0;
@@ -39,24 +44,35 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--bg);
-  border-left: 1px solid var(--border);
+  background: transparent;
+  border-left: 1px solid rgba(30, 144, 255, 0.1);
 }
 ::-webkit-scrollbar-thumb {
   background: var(--accent-light);
   border: 1px solid var(--accent);
-  border-radius: 2px;
+  border-radius: 3px;
+  box-shadow: 0 0 5px rgba(30, 144, 255, 0.3);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
   box-shadow: var(--glow);
 }
 
+/* Hover glow animations for high-tech feel */
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 5px rgba(30, 144, 255, 0.3); }
+  50% { box-shadow: 0 0 15px rgba(30, 144, 255, 0.6); }
+  100% { box-shadow: 0 0 5px rgba(30, 144, 255, 0.3); }
+}
+.glow-pulse {
+  animation: pulseGlow 3s infinite ease-in-out;
+}
+
 /* Markdown rendering for agent responses */
 .prose-athena p {
   margin: 0.4em 0;
   line-height: 1.65;
-  /* Removed text-shadow for better readability */
+  text-shadow: 0 0 1px rgba(240, 248, 255, 0.1);
 }
 .prose-athena p:first-child { margin-top: 0; }
 .prose-athena p:last-child  { margin-bottom: 0; }
@@ -87,24 +103,26 @@ body {
 }
 .prose-athena li { margin: 0.2em 0; }
 
-.prose-athena strong { font-weight: 700; color: #FFF; text-shadow: var(--glow); }
+.prose-athena strong { font-weight: 700; color: #FFF; text-shadow: 0 0 5px rgba(255, 255, 255, 0.5); }
 .prose-athena em    { font-style: italic; color: var(--accent-hover); }
 
 .prose-athena code {
-  background: rgba(30, 144, 255, 0.1);
-  color: var(--accent);
-  border: 1px solid rgba(30, 144, 255, 0.2);
+  background: rgba(30, 144, 255, 0.15);
+  color: #FFF;
+  text-shadow: 0 0 5px rgba(30, 144, 255, 0.8);
+  border: 1px solid rgba(30, 144, 255, 0.4);
   padding: 0.15em 0.35em;
   border-radius: 2px;
   font-size: 0.85em;
   font-family: 'Share Tech Mono', monospace;
+  box-shadow: 0 0 8px rgba(30, 144, 255, 0.2);
 }
 .prose-athena pre {
-  background: rgba(10, 10, 10, 0.8);
+  background: rgba(10, 12, 15, 0.9);
   border: 1px solid var(--border);
-  box-shadow: inset 0 0 10px rgba(30, 144, 255, 0.05);
+  box-shadow: inset 0 0 15px rgba(30, 144, 255, 0.1), 0 0 10px rgba(30, 144, 255, 0.1);
   padding: 0.8em 1em;
-  border-radius: 4px;
+  border-radius: 6px;
   overflow-x: auto;
   margin: 0.6em 0;
 }
@@ -115,16 +133,20 @@ body {
   font-size: 0.85em;
   color: var(--text);
   text-shadow: none;
+  box-shadow: none;
 }
 
 .prose-athena a {
-  color: var(--accent);
+  color: var(--accent-hover);
   text-decoration: none;
-  border-bottom: 1px solid var(--accent);
-  text-shadow: 0 0 4px rgba(30, 144, 255, 0.3);
+  border-bottom: 1px dashed var(--accent);
+  text-shadow: 0 0 5px rgba(30, 144, 255, 0.5);
+  transition: all 0.2s ease;
 }
 .prose-athena a:hover {
   background: var(--accent-light);
+  border-bottom-style: solid;
+  text-shadow: var(--glow);
 }
 
 .prose-athena blockquote {
@@ -132,12 +154,13 @@ body {
   padding-left: 0.75em;
   margin: 0.5em 0;
   color: var(--text-muted);
-  background: linear-gradient(90deg, var(--accent-light), transparent);
+  background: linear-gradient(90deg, rgba(30, 144, 255, 0.1), transparent);
+  box-shadow: inset 20px 0 20px -20px rgba(30, 144, 255, 0.3);
 }
 
 .prose-athena hr {
   border: none;
   border-top: 1px solid var(--border);
-  box-shadow: 0 1px 3px var(--accent);
+  box-shadow: 0 1px 5px var(--accent);
   margin: 0.75em 0;
 }

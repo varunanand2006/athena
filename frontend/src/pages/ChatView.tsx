@@ -119,8 +119,8 @@ export default function ChatView({
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center select-none">
             <div
-              className="w-12 h-12 rounded-2xl flex items-center justify-center text-white font-bold text-xl mb-4"
-              style={{ background: 'var(--accent)' }}
+              className="w-12 h-12 rounded-2xl flex items-center justify-center text-white font-bold text-xl mb-4 glow-pulse"
+              style={{ background: 'var(--accent)', boxShadow: 'var(--glow)' }}
             >
               A
             </div>
@@ -140,10 +140,14 @@ export default function ChatView({
                 className={`px-4 py-3 rounded-2xl text-sm ${msg.role === 'user' ? 'text-white rounded-br-sm' : 'rounded-bl-sm'}`}
                 style={
                   msg.role === 'user'
-                    ? { background: 'var(--accent)' }
+                    ? { 
+                        background: 'var(--accent)', 
+                        boxShadow: '0 0 15px rgba(30, 144, 255, 0.5)', 
+                        border: '1px solid rgba(255,255,255,0.15)' 
+                      }
                     : {
                         background: 'var(--card)',
-                        boxShadow: 'var(--shadow)',
+                        boxShadow: 'var(--shadow-md)',
                         border: '1px solid var(--border)',
                       }
                 }
@@ -199,9 +203,11 @@ export default function ChatView({
           style={{ background: 'var(--bg)', border: '1.5px solid var(--border)' }}
           onFocus={(e) => {
             ;(e.currentTarget as HTMLDivElement).style.borderColor = 'var(--accent)'
+            ;(e.currentTarget as HTMLDivElement).style.boxShadow = 'var(--glow)'
           }}
           onBlur={(e) => {
             ;(e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border)'
+            ;(e.currentTarget as HTMLDivElement).style.boxShadow = 'none'
           }}
         >
           <textarea
