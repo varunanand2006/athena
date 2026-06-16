@@ -112,7 +112,7 @@ export default function Sidebar({
     >
       {/* Logo */}
       <div className={`px-4 pt-5 pb-4 flex flex-col ${isCollapsed ? 'items-center' : ''}`} style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} mb-3`}>
+        <NavLink to="/" end className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} mb-3 cursor-pointer`}>
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 glow-pulse"
             style={{ background: 'var(--accent)', boxShadow: 'var(--glow)' }}
@@ -120,7 +120,7 @@ export default function Sidebar({
             <IconAthena />
           </div>
           {!isCollapsed && <span className="font-bold text-lg tracking-widest" style={{ color: 'var(--text)', textShadow: 'var(--glow)', textTransform: 'uppercase' }}>Athena</span>}
-        </div>
+        </NavLink>
         {!isCollapsed && (
           <div className="flex items-center gap-1.5 ml-1">
             <div
@@ -177,30 +177,17 @@ export default function Sidebar({
           {!isCollapsed && <span>Dashboard</span>}
         </NavLink>
         <NavLink
-          to="/documents"
+          to="/library"
           className={({ isActive }) =>
             `flex items-center ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-semibold transition-all ${
               isActive ? 'text-white' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--accent-light)]'
             }`
           }
           style={({ isActive }) => (isActive ? { background: 'var(--accent)', boxShadow: 'var(--glow)' } : {})}
-          title={isCollapsed ? "Documents" : undefined}
+          title={isCollapsed ? "Library" : undefined}
         >
           <IconDocuments />
-          {!isCollapsed && <span>Documents</span>}
-        </NavLink>
-        <NavLink
-          to="/memory"
-          className={({ isActive }) =>
-            `flex items-center ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-semibold transition-all ${
-              isActive ? 'text-white' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--accent-light)]'
-            }`
-          }
-          style={({ isActive }) => (isActive ? { background: 'var(--accent)', boxShadow: 'var(--glow)' } : {})}
-          title={isCollapsed ? "Memory" : undefined}
-        >
-          <IconMemory />
-          {!isCollapsed && <span>Memory</span>}
+          {!isCollapsed && <span>Library</span>}
         </NavLink>
         <NavLink
           to="/system"

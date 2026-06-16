@@ -3,9 +3,8 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import ChatView from './pages/ChatView'
 import DashboardView from './pages/DashboardView'
-import DocumentsView from './pages/DocumentsView'
 import HomeView from './pages/HomeView'
-import MemoryView from './pages/MemoryView'
+import LibraryView from './pages/LibraryView'
 import SystemView from './pages/SystemView'
 
 export interface Message {
@@ -78,8 +77,7 @@ export default function App() {
               }
             />
             <Route path="/dashboard" element={<DashboardView />} />
-            <Route path="/documents" element={<DocumentsView />} />
-            <Route path="/memory" element={<MemoryView />} />
+            <Route path="/library" element={<LibraryView />} />
             <Route path="/system" element={<SystemView />} />
           </Routes>
         </main>
