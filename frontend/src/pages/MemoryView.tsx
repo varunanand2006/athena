@@ -91,21 +91,18 @@ export default function MemoryView() {
   }, [selected?.title, fetchNotes])
 
   return (
-    <div className="h-full flex flex-col" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderBottom: '1px solid var(--border)' }}>
-        <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-          Memory
-        </h1>
-        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-          What Athena remembers — written through chat, read-only here
+    <div className="h-full flex flex-col bg-transparent">
+      <div className="px-8 py-6 shrink-0 bg-transparent flex flex-col items-start z-10">
+        <h1 className="font-bold text-3xl tracking-wide uppercase" style={{ color: 'var(--text)', textShadow: 'var(--glow)' }}>Memory</h1>
+        <p className="text-sm mt-1 uppercase tracking-widest font-semibold" style={{ color: 'var(--text-muted)' }}>
+          Long-term Storage
         </p>
       </div>
-
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden px-8 pb-8 gap-6 z-10">
         {/* Note list */}
         <div
-          className="w-72 shrink-0 overflow-y-auto glass-panel"
-          style={{ borderRight: '1px solid var(--border)' }}
+          className="w-80 shrink-0 overflow-y-auto glass-panel rounded-3xl"
+          style={{ border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)' }}
         >
           <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
             <span className="font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>

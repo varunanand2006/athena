@@ -17,6 +17,7 @@ export interface Message {
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const refreshSidebarRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
@@ -47,14 +48,20 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
+      {/* Root container is now transparent to let body background show */}
+      <div className="flex h-screen overflow-hidden transparent">
         <Sidebar
           onNewConversation={handleNewConversation}
           onConversationSelect={handleConversationSelect}
           activeConversationId={conversationId}
           refreshRef={refreshSidebarRef}
+          isCollapsed={sidebarCollapsed}
+          setIsCollapsed={setSidebarCollapsed}
         />
-        <main className="flex-1 overflow-hidden">
+        <main 
+          className="flex-1 overflow-hidden transition-all duration-300 relative h-full flex flex-col"
+          style={{ marginLeft: sidebarCollapsed ? '100px' : '268px' }}
+        >
           <Routes>
             <Route
               path="/"

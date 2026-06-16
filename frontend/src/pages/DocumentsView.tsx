@@ -138,17 +138,14 @@ export default function DocumentsView() {
   )
 
   return (
-    <div className="h-full overflow-y-auto" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderBottom: '1px solid var(--border)' }}>
-        <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-          Documents
-        </h1>
-        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-          Upload, browse, and search the document library
+    <div className="h-full overflow-y-auto bg-transparent">
+      <div className="px-8 py-6 shrink-0 bg-transparent flex flex-col items-start z-10">
+        <h1 className="font-bold text-3xl tracking-wide uppercase" style={{ color: 'var(--text)', textShadow: 'var(--glow)' }}>Documents</h1>
+        <p className="text-sm mt-1 uppercase tracking-widest font-semibold" style={{ color: 'var(--text-muted)' }}>
+          Knowledge Base
         </p>
       </div>
-
-      <div className="p-6 flex flex-col gap-4">
+      <div className="px-8 pb-8 flex flex-col gap-6 z-10 max-w-5xl">
         {/* Drag-drop + button */}
         <div
           onDrop={onDrop}
