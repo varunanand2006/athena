@@ -1,11 +1,12 @@
 import asyncio
 import os
+import re
 import time
 import threading
 import logging
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 import psycopg2
@@ -432,11 +433,74 @@ def search_memory(query: str) -> str:
     return "\n\n".join(blocks)
 
 
+# --- Temporal recall tool (Phase 17) ---------------------------------------
+
+
+def _resolve_window_days(timeframe: str) -> int:
+    """Map a free-text timeframe to a forward window in days. Defaults to a
+    week so an empty/unknown value still answers 'what's coming up?'."""
+    tf = (timeframe or "").lower().strip()
+    m = re.search(r"\d+", tf)
+    if m:
+        return int(m.group())
+    if "today" in tf:
+        return 0
+    if "tomorrow" in tf:
+        return 1
+    if "month" in tf:
+        return 30
+    if "year" in tf:
+        return 365
+    return 7  # "week" / anything else
+
+
+@tool
+def upcoming(timeframe: str = "week") -> str:
+    """List upcoming dated events (interviews, deadlines, applications) stored in
+    the memory vault, within the given timeframe, sorted by date. Use this for
+    any time-based question — "what's coming up this week?", "any deadlines
+    soon?", "what's on my calendar?". `timeframe` accepts "today", "tomorrow",
+    "week" (default, next 7 days), "month" (next 30 days), or "next N days".
+    Each event carries the note title it came from and its kind. This reads
+    dates straight from note frontmatter — it is NOT a keyword search."""
+    window = _resolve_window_days(timeframe)
+    events, note_count, over_cap = memory_vault.collect_events()
+    if over_cap:
+        # Honest tripwire (parallels Phase 16's cap): a linear full-vault scan
+        # has outgrown its welcome — time for a derived index. Not built here.
+        logger.warning(
+            "upcoming(): vault too big for frontmatter scan (%d notes > cap) — "
+            "time for a derived index.",
+            note_count,
+        )
+
+    today = date.today()
+    end = today + timedelta(days=window)
+    hits = []
+    for ev in events:
+        try:
+            d = date.fromisoformat(ev["date"])
+        except ValueError:
+            continue  # malformed date — note still exists as prose
+        if today <= d <= end:
+            hits.append((d, ev))
+
+    if not hits:
+        return f"No upcoming events in the next {window} day(s)."
+
+    hits.sort(key=lambda x: x[0])
+    lines = [f"Upcoming events (next {window} day(s)):"]
+    for d, ev in hits:
+        kind = f" ({ev['kind']})" if ev["kind"] else ""
+        lines.append(f"- {d.isoformat()}{kind}: {ev['title']}")
+    return "\n".join(lines)
+
+
 SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
     "You have access to these tools: web_search, find_documents, load_document, "
     "lookup_leetcode, list_documents, get_table_of_contents, get_document_summary, "
-    "write_memory, list_memories, and search_memory. "
+    "write_memory, list_memories, search_memory, and upcoming. "
     "For content questions about the user's own documents — background, resume, skills, "
     "projects, notes — follow this two-step flow: (1) call find_documents(query) to "
     "identify the relevant document(s) by summary similarity, then (2) call "
@@ -465,11 +529,76 @@ SYSTEM_PROMPT = (
     "facts automatically in the background; foreground saving is NOT your job "
     "and doing it on your own initiative is a mistake. "
     "When a question might be answered by something stored in memory (e.g. "
-    "\"what am I prepping for?\", \"what did I apply to?\"), call search_memory "
-    "(or list_memories first, then search) before answering, and answer from the "
-    "note's content. "
+    "\"what am I prepping for?\", \"what did I apply to?\") and it is NOT already "
+    "covered by the loaded memory block at the top of this prompt, call "
+    "search_memory (or list_memories first, then search) before answering, and "
+    "answer from the note's content. "
+    "For TIME-BASED questions about what is coming up — \"what's coming up this "
+    "week?\", \"any deadlines soon?\", \"what's on my calendar?\" — you MUST call "
+    "upcoming with an appropriate timeframe and answer from the dated events it "
+    "returns, rather than guessing from memory text. "
     "Never say you cannot access information — use the appropriate tool instead."
 )
+
+
+# --- Ambient memory recall (Phase 16) --------------------------------------
+# The whole vault is loaded into the chat agent's system prompt each turn so the
+# MODEL surfaces relevant memories — no separate retrieval system. Two distinct,
+# clearly-labeled sections are injected: the DATA (the assembled note block) and
+# the POLICY (how to use it). Injecting via the system prompt — not a user-turn
+# prefix — keeps the memory blob out of the Postgres message record, so it never
+# pollutes stored history or future reflection passes (the Phase 15
+# foreground/background contamination class).
+#
+# CAVEAT (re-verify on any foreground-model swap, like Phase 15's explicit-only
+# rule): the recall policy below is PROMPT-ENFORCED. A different chat model may
+# recite memories unprompted or ignore the block — re-run the Phase 16 gate.
+
+RECALL_POLICY = (
+    "--- MEMORY RECALL POLICY ---\n"
+    "The 'KNOWN MEMORIES ABOUT THE USER' block above is your standing memory of "
+    "this user, reloaded fresh every turn. Treat it as things you already know. "
+    "When something in it is relevant to the user's current message, draw on it "
+    "naturally — you do NOT need to call search_memory or list_memories for "
+    "anything already shown there. Do NOT recite, list, repeat, or summarize "
+    "these memories unprompted: surface a memory only when it genuinely bears on "
+    "the current turn. If the current message has nothing to do with any stored "
+    "memory, ignore the block entirely and respond normally. Never tell the user "
+    "that memories were 'loaded' or that you have a memory block.\n"
+    "--- END MEMORY RECALL POLICY ---"
+)
+
+
+def _build_chat_system_prompt() -> str:
+    """Assemble the chat-path system prompt: the full-vault memory block + recall
+    policy prepended to the base prompt. Chat path only (gpt-4o-mini); the
+    background/reflection path uses the bare SYSTEM_PROMPT untouched.
+
+    Logs the block's token count every turn so the per-turn memory cost (real
+    money on gpt-4o-mini) is observable, and warns loudly when the cap trips."""
+    ctx = memory_vault.assemble_memory_context()
+    if ctx["over_cap"]:
+        logger.warning(
+            "Memory context OVER CAP: ~%d tokens > %d cap across %d notes — "
+            "vault too big for full-context load, time for embeddings. "
+            "Loading up to the cap only.",
+            ctx["tokens"], ctx["max_tokens"], ctx["note_count"],
+        )
+    else:
+        logger.info(
+            "Memory context: ~%d tokens, %d notes (cap %d).",
+            ctx["tokens"], ctx["note_count"], ctx["max_tokens"],
+        )
+
+    if not ctx["block"]:
+        return SYSTEM_PROMPT  # empty vault — nothing to inject
+
+    data_section = (
+        "--- KNOWN MEMORIES ABOUT THE USER (standing context, loaded each turn) ---\n"
+        f"{ctx['block']}\n"
+        "--- END KNOWN MEMORIES ---"
+    )
+    return f"{data_section}\n\n{RECALL_POLICY}\n\n{SYSTEM_PROMPT}"
 
 
 class ChatRequest(BaseModel):
@@ -561,6 +690,9 @@ async def chat(req: ChatRequest):
         messages = history + [{"role": "user", "content": req.message}]
 
         llm = get_llm(req.mode)
+        # Phase 16: inject the full-vault memory block + recall policy on the
+        # chat path only. The background path keeps the bare prompt.
+        prompt = _build_chat_system_prompt() if req.mode == "chat" else SYSTEM_PROMPT
         agent = create_react_agent(
             llm,
             tools=[
@@ -574,8 +706,9 @@ async def chat(req: ChatRequest):
                 write_memory,
                 list_memories,
                 search_memory,
+                upcoming,
             ],
-            prompt=SYSTEM_PROMPT,
+            prompt=prompt,
         )
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
@@ -917,6 +1050,11 @@ async def system_health():
 
     services = [{"name": "agent", "reachable": True, "latency_ms": 0}, *pinged]
 
+    # Phase 16: surface the per-turn ambient-memory cost so the approach to the
+    # full-context cap is watchable, not blind. over_cap is the named tripwire
+    # for the future embeddings phase.
+    mem_ctx = memory_vault.assemble_memory_context()
+
     conn = pg_conn()
     try:
         with conn.cursor() as cur:
@@ -949,6 +1087,12 @@ async def system_health():
             "leetcode": {
                 "total_solved": total_leetcode,
                 "last_solved_at": last_leetcode.isoformat() if last_leetcode else None,
+            },
+            "memory": {
+                "note_count": mem_ctx["note_count"],
+                "context_tokens": mem_ctx["tokens"],
+                "max_tokens": mem_ctx["max_tokens"],
+                "over_cap": mem_ctx["over_cap"],
             },
         },
     }

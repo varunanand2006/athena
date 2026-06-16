@@ -6,10 +6,16 @@ import ReactMarkdown from 'react-markdown'
 // ("remember that…") or automatically (Phase 15); this view allows reading and
 // deletion, making the user the final authority over what's remembered.
 
+interface MemEvent {
+  date: string
+  kind: string
+}
+
 interface NoteMeta {
   slug: string
   title: string
   tags: string[]
+  events: MemEvent[]
   created: string
   updated: string
   source: string
@@ -17,6 +23,20 @@ interface NoteMeta {
 
 interface Note extends NoteMeta {
   body: string
+}
+
+// A small dated chip for a note event (Phase 17 temporal frontmatter).
+function EventChip({ ev }: { ev: MemEvent }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium"
+      style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#047857' }}
+      title={ev.kind || 'event'}
+    >
+      📅 {formatDate(ev.date)}
+      {ev.kind ? <span style={{ opacity: 0.8 }}>· {ev.kind}</span> : null}
+    </span>
+  )
 }
 
 // Badge distinguishing autonomously-captured notes (Phase 15) from ones the
@@ -90,12 +110,52 @@ export default function MemoryView() {
     }
   }, [selected?.title, fetchNotes])
 
+  // Upcoming events across all notes (Phase 17): flatten each note's events,
+  // keep ones today or later, soonest first. Read-only mirror of the agent's
+  // upcoming() tool — same frontmatter, surfaced in the UI.
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const upcoming = notes
+    .flatMap((n) => (n.events ?? []).map((e) => ({ ...e, slug: n.slug, title: n.title })))
+    .filter((e) => e.date && e.date >= todayStr)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, 8)
+
   return (
     <div className="h-full flex flex-col bg-transparent pt-8">
       <div className="flex-1 flex overflow-hidden px-8 pb-8 gap-6 z-10">
+        {/* Left column: Upcoming events + note list */}
+        <div className="w-80 shrink-0 flex flex-col gap-4 overflow-y-auto">
+        {upcoming.length > 0 && (
+          <div
+            className="glass-panel rounded-3xl shrink-0"
+            style={{ border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)' }}
+          >
+            <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <span className="font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                Upcoming
+              </span>
+            </div>
+            {upcoming.map((e, i) => (
+              <button
+                key={`${e.slug}-${e.date}-${e.kind}-${i}`}
+                onClick={() => openNote(e.slug)}
+                className="w-full text-left px-4 py-2.5 transition-colors"
+                style={{ borderBottom: '1px solid var(--border)' }}
+              >
+                <div className="flex items-center gap-2 mb-0.5">
+                  <EventChip ev={e} />
+                </div>
+                <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                  {e.title}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Note list */}
         <div
-          className="w-80 shrink-0 overflow-y-auto glass-panel rounded-3xl"
+          className="flex-1 min-h-0 overflow-y-auto glass-panel rounded-3xl"
           style={{ border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)' }}
         >
           <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -158,6 +218,7 @@ export default function MemoryView() {
             )
           })}
         </div>
+        </div>
 
         {/* Note detail */}
         <div className="flex-1 overflow-y-auto p-6">
@@ -201,6 +262,9 @@ export default function MemoryView() {
                   >
                     {t}
                   </span>
+                ))}
+                {(selected.events ?? []).map((e, i) => (
+                  <EventChip key={`${e.date}-${e.kind}-${i}`} ev={e} />
                 ))}
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   created {formatDate(selected.created)} · updated {formatDate(selected.updated)}

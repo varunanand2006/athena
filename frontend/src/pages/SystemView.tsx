@@ -14,6 +14,12 @@ interface SystemHealth {
     documents: { total: number; by_status: Record<string, number> }
     internships: { total: number; last_found_date: string | null }
     leetcode: { total_solved: number; last_solved_at: string | null }
+    memory?: {
+      note_count: number
+      context_tokens: number
+      max_tokens: number
+      over_cap: boolean
+    }
   }
 }
 
@@ -130,6 +136,23 @@ function DataSection({ data }: { data: SystemHealth['data'] }) {
             last solved: {relativeTime(data.leetcode.last_solved_at)}
           </p>
         </Card>
+
+        {data.memory && (
+          <Card title="Memory notes" value={data.memory.note_count}>
+            <div className="text-xs flex flex-col gap-0.5" style={{ color: 'var(--text-muted)' }}>
+              <span
+                style={{ color: data.memory.over_cap ? 'var(--accent)' : 'var(--text-muted)' }}
+              >
+                recall context: ~{data.memory.context_tokens.toLocaleString()} / {data.memory.max_tokens.toLocaleString()} tok
+              </span>
+              {data.memory.over_cap && (
+                <span style={{ color: 'var(--accent)' }}>
+                  ⚠ over cap — vault too big for full-context load (time for embeddings)
+                </span>
+              )}
+            </div>
+          </Card>
+        )}
       </div>
     </section>
   )

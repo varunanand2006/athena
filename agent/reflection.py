@@ -16,7 +16,7 @@ import logging
 import os
 import psycopg2
 import httpx
-from datetime import datetime
+from datetime import date, datetime
 from langchain_ollama import ChatOllama
 
 logger = logging.getLogger(__name__)
@@ -82,8 +82,11 @@ def _reflection_prompt(conversation_history: list[dict], memory_index: str) -> s
         f"[{msg['timestamp']}] {msg['role'].upper()}: {msg['content']}"
         for msg in conversation_history
     ])
+    today = date.today().isoformat()
 
     return f"""You are reflecting on a conversation to extract durable memories for the user.
+
+TODAY'S DATE IS {today}.
 
 CONVERSATION:
 {history_text}
@@ -106,12 +109,18 @@ DO NOT capture:
 
 Before writing, check the vault index. If a relevant note exists, UPDATE it (same title) rather than creating a near-duplicate.
 
+DATES (events):
+If a memory concerns something TIME-BOUND — an interview, a deadline, an application due date, a scheduled event — also record the date(s) in an "events" list. Each event is {{"date": "YYYY-MM-DD", "kind": "<short label like interview|deadline|application>"}}.
+- Capture ONLY concrete, resolved calendar dates. Resolve relative dates against TODAY ({today}): e.g. if today is {today} and the user says "next Friday", work out the actual YYYY-MM-DD.
+- If the timing is vague or you cannot resolve it to a real date ("sometime soon", "in a few weeks"), DO NOT invent one — leave events empty and keep the timing in the content prose only.
+- A memory with no date has "events": [] (most memories).
+
 OUTPUT FORMAT:
 Return ONLY a JSON array of decisions (or an empty array if nothing to capture). Each item has:
-{{"title": "short topic name", "content": "what to remember", "tags": ["tag1", "tag2"], "is_update": true/false}}
+{{"title": "short topic name", "content": "what to remember", "tags": ["tag1", "tag2"], "events": [{{"date": "YYYY-MM-DD", "kind": "interview"}}], "is_update": true/false}}
 
-Example:
-[{{"title": "Stripe interview prep", "content": "Interview scheduled for Friday. Focus areas: system design, API design.", "tags": ["interview", "stripe"], "is_update": false}}]
+Example (today is {today}):
+[{{"title": "Stripe interview prep", "content": "Interview scheduled for next Friday. Focus areas: system design, API design.", "tags": ["interview", "stripe"], "events": [{{"date": "2026-06-19", "kind": "interview"}}], "is_update": false}}]
 
 Return ONLY the JSON array, no other text."""
 
@@ -161,6 +170,27 @@ def _parse_reflection_response(response_text: str) -> list[dict]:
     return []
 
 
+def _sanitize_events(raw) -> list[dict]:
+    """Validate model-emitted events: keep only items with a real ISO
+    (YYYY-MM-DD) date, coercing kind to a short string. A malformed/unresolvable
+    date is dropped (the note still exists as prose) rather than written as a
+    broken event — getting it wrong must stay cheap and recoverable."""
+    if not isinstance(raw, list):
+        return []
+    clean = []
+    for ev in raw:
+        if not isinstance(ev, dict):
+            continue
+        d = str(ev.get("date", "")).strip()
+        try:
+            date.fromisoformat(d)
+        except ValueError:
+            continue
+        kind = str(ev.get("kind", "")).strip()[:40]
+        clean.append({"date": d, "kind": kind})
+    return clean
+
+
 def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
     """Reflect on a single conversation and capture durable memories.
 
@@ -206,10 +236,11 @@ def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
             title = decision.get("title", "")
             content = decision.get("content", "")
             tags = decision.get("tags", [])
+            events = _sanitize_events(decision.get("events", []))
             if not title or not content:
                 continue
             try:
-                result = memory_vault.write_note(title, content, tags, source="auto")
+                result = memory_vault.write_note(title, content, tags, source="auto", events=events)
                 logger.info(
                     f"  {'Updated' if result['action'] == 'updated' else 'Created'} "
                     f"note '{result['title']}' ({result['slug']}.md) [source={result['source']}]"

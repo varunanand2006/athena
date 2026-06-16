@@ -16,6 +16,7 @@ by a free-text body:
     updated: 2026-06-15
     source: explicit
     tags: [interview, meta]
+    events: [{date: 2026-06-19, kind: interview}]
     ---
 
     Varun is preparing for a Meta software engineering interview...
@@ -28,6 +29,15 @@ Rules:
                 autonomous reflection). Records how the note ORIGINATED;
                 preserved across updates. Missing source -> "explicit".
   * `tags`    — a YAML list; may be empty (`tags: []`).
+  * `events`  — (Phase 17) an OPTIONAL YAML list of {date, kind} maps, the
+                only structured/queryable field we extract from a note's prose
+                when it concerns something time-bound (an interview, a
+                deadline, an application). `date` is ISO (YYYY-MM-DD); `kind`
+                is a short label. Missing/empty -> `[]` (every pre-Phase-17
+                note is dateless by definition). Merged across same-slug
+                updates like `tags`. The note stays the single source of
+                truth — there is deliberately no separate events table (see
+                ADR 009).
   * The body is everything after the closing `---`, free-form markdown.
 
 FILENAME CONVENTION
@@ -50,6 +60,19 @@ import re
 from datetime import date
 
 MEMORY_DIR = os.getenv("MEMORY_DIR", "/data/memory")
+
+# Phase 16 — the whole vault is loaded into the chat agent's system prompt each
+# turn (ambient recall). This cap is the honest, named tripwire for the FUTURE
+# embeddings phase: when the assembled block exceeds it we still load up to the
+# cap, but flag over_cap so /system and the logs surface "vault too big for
+# full-context load". Generous default; env-overridable so it can be tuned
+# without a rebuild.
+MEMORY_CONTEXT_MAX_TOKENS = int(os.getenv("MEMORY_CONTEXT_MAX_TOKENS", "8000"))
+
+# Phase 17 — upcoming() does a full-vault frontmatter scan (same pattern as the
+# Phase 16 full-vault load). This is the parallel tripwire: past it, log "vault
+# too big for frontmatter scan — time for a derived index".
+MEMORY_EVENTS_MAX_NOTES = int(os.getenv("MEMORY_EVENTS_MAX_NOTES", "500"))
 
 
 def slugify(title: str) -> str:
@@ -81,6 +104,59 @@ def _format_tags(tags: list[str]) -> str:
     return "[" + ", ".join(tags) + "]"
 
 
+# --- events (Phase 17) -----------------------------------------------------
+# Same hand-rolled spirit as tags: the format is fixed and tiny, so we parse it
+# without PyYAML. An event is a `{date: YYYY-MM-DD, kind: <short>}` flow map and
+# the field is a flow list of them: `events: [{date: ..., kind: ...}, {...}]`.
+# This is valid YAML flow style, so the vault stays Obsidian-compatible.
+
+_EVENT_RE = re.compile(r"\{([^}]*)\}")
+
+
+def _parse_events(raw: str) -> list[dict]:
+    """Parse an `events:` value into a list of {date, kind} dicts.
+
+    Tolerant: only well-formed maps with a non-empty `date` are kept; anything
+    malformed is dropped (a missed date just means the note isn't
+    time-queryable — still exists as prose). `events` is a DERIVED field,
+    rebuildable by re-scanning the vault, so dropping garbage is safe."""
+    events = []
+    for inner in _EVENT_RE.findall(raw):
+        fields = {}
+        for part in inner.split(","):
+            if ":" not in part:
+                continue
+            k, _, v = part.partition(":")
+            fields[k.strip()] = v.strip()
+        date = fields.get("date", "")
+        if not date:
+            continue
+        events.append({"date": date, "kind": fields.get("kind", "")})
+    return events
+
+
+def _format_events(events: list[dict]) -> str:
+    parts = [
+        f"{{date: {e.get('date', '')}, kind: {e.get('kind', '')}}}"
+        for e in events
+        if e.get("date")
+    ]
+    return "[" + ", ".join(parts) + "]"
+
+
+def _merge_events(existing: list[dict], new: list[dict]) -> list[dict]:
+    """Union events across a same-slug update, deduping on (date, kind) —
+    mirrors how tags are merged so re-reflection doesn't duplicate a deadline."""
+    merged = list(existing)
+    seen = {(e.get("date"), e.get("kind")) for e in merged}
+    for e in new:
+        key = (e.get("date"), e.get("kind"))
+        if e.get("date") and key not in seen:
+            merged.append({"date": e["date"], "kind": e.get("kind", "")})
+            seen.add(key)
+    return merged
+
+
 def parse_note(text: str) -> tuple[dict, str]:
     """Split a note's raw text into (frontmatter dict, body).
 
@@ -89,7 +165,10 @@ def parse_note(text: str) -> tuple[dict, str]:
     """
     # `source` defaults to "explicit": any note written before Phase 15 (or
     # with no source line) was, by definition, an explicit user-driven write.
-    meta: dict = {"title": "", "created": "", "updated": "", "source": "explicit", "tags": []}
+    meta: dict = {
+        "title": "", "created": "", "updated": "", "source": "explicit",
+        "tags": [], "events": [],
+    }
     if not text.startswith("---"):
         return meta, text.strip()
 
@@ -111,6 +190,8 @@ def parse_note(text: str) -> tuple[dict, str]:
         val = val.strip()
         if key == "tags":
             meta["tags"] = _parse_tags(val)
+        elif key == "events":
+            meta["events"] = _parse_events(val)
         elif key in meta:
             meta[key] = val
 
@@ -120,7 +201,7 @@ def parse_note(text: str) -> tuple[dict, str]:
 
 def _render_note(
     title: str, created: str, updated: str, tags: list[str], body: str,
-    source: str = "explicit",
+    source: str = "explicit", events: list[dict] | None = None,
 ) -> str:
     return (
         "---\n"
@@ -129,6 +210,7 @@ def _render_note(
         f"updated: {updated}\n"
         f"source: {source}\n"
         f"tags: {_format_tags(tags)}\n"
+        f"events: {_format_events(events or [])}\n"
         "---\n\n"
         f"{body.strip()}\n"
     )
@@ -149,6 +231,7 @@ def read_note(slug: str) -> dict | None:
         "updated": meta["updated"],
         "source": meta["source"] or "explicit",
         "tags": meta["tags"],
+        "events": meta["events"],
         "body": body,
     }
 
@@ -170,6 +253,7 @@ def list_notes() -> list[dict]:
             "slug": note["slug"],
             "title": note["title"],
             "tags": note["tags"],
+            "events": note["events"],
             "created": note["created"],
             "updated": note["updated"],
             "source": note["source"],
@@ -180,20 +264,26 @@ def list_notes() -> list[dict]:
 
 def write_note(
     title: str, content: str, tags: list[str] | None = None,
-    source: str = "explicit",
+    source: str = "explicit", events: list[dict] | None = None,
 ) -> dict:
     """Create or UPDATE a note. If a note with the same slug exists, append
-    the new content to its body and bump `updated` (and union the tags),
-    rather than creating a duplicate file. Returns details of what happened.
+    the new content to its body and bump `updated` (and union the tags and
+    events), rather than creating a duplicate file. Returns details of what
+    happened.
 
     `source` ("explicit" | "auto") records how the note ORIGINATED. On update
     the existing note's source is PRESERVED — origin is a property of the first
     write, so an auto-reflection touching a user-written note keeps it
     "explicit" (and vice versa). This keeps the frontend's source badge honest
     about whether the agent created a note on its own initiative.
+
+    `events` (Phase 17) is an optional list of {date, kind} maps extracted from
+    the note's prose. Merged across same-slug updates the same way tags are, so
+    a re-reflection adds new deadlines without dropping or duplicating old ones.
     """
     os.makedirs(MEMORY_DIR, exist_ok=True)
     tags = tags or []
+    events = events or []
     slug = slugify(title)
     path = os.path.join(MEMORY_DIR, f"{slug}.md")
     today = date.today().isoformat()
@@ -207,6 +297,7 @@ def write_note(
         for t in tags:
             if t not in merged_tags:
                 merged_tags.append(t)
+        merged_events = _merge_events(existing["events"], events)
         # append the new content as a dated addition to the existing body
         body = existing["body"].rstrip()
         if body:
@@ -215,12 +306,14 @@ def write_note(
             body = content.strip()
         title = existing["title"] or title
         note_source = existing["source"] or "explicit"  # preserve origin
-        text = _render_note(title, created, today, merged_tags, body, note_source)
+        text = _render_note(title, created, today, merged_tags, body, note_source, merged_events)
         final_tags = merged_tags
+        final_events = merged_events
     else:
         action = "created"
         note_source = source
-        text = _render_note(title, today, today, tags, content, source)
+        final_events = _merge_events([], events)  # dedup + drop dateless
+        text = _render_note(title, today, today, tags, content, source, final_events)
         final_tags = tags
 
     tmp = path + ".tmp"
@@ -234,6 +327,7 @@ def write_note(
         "title": title,
         "path": path,
         "tags": final_tags,
+        "events": final_events,
         "source": note_source,
         "updated": today,
     }
@@ -315,3 +409,98 @@ def search_notes(query: str, limit: int = 3) -> list[dict]:
         if note is not None:
             results.append(note)
     return results
+
+
+# --- Ambient recall: full-vault context block (Phase 16) -------------------
+
+
+def _approx_tokens(text: str) -> int:
+    """Cheap token estimate (~4 chars/token). Deliberately NOT tiktoken: this
+    feeds a tripwire and a /system gauge that are mostly future-proofing today,
+    so the heuristic avoids a dependency to sync across pyproject + Dockerfile."""
+    return max(1, len(text) // 4) if text else 0
+
+
+def _render_note_for_context(note: dict) -> str:
+    """One note rendered for the system-prompt memory block: title + tags +
+    any events + body. Compact but complete — recall is the model reasoning
+    over this text, so it gets the whole note, not a summary."""
+    tag_str = f" [{', '.join(note['tags'])}]" if note["tags"] else ""
+    lines = [f"## {note['title']}{tag_str}", f"(updated {note['updated']})"]
+    if note["events"]:
+        lines.append(f"events: {_format_events(note['events'])}")
+    lines.append("")
+    lines.append(note["body"])
+    return "\n".join(lines).strip()
+
+
+def assemble_memory_context() -> dict:
+    """Read the ENTIRE vault and format it into one block for the chat agent's
+    system prompt (Phase 16 ambient recall). Returns the block plus measurements
+    so the caller can enforce the cap, report cost, and watch the tripwire.
+
+    This is the single home for the cap guardrail. `tokens` is always the FULL
+    vault size (the number to watch as it approaches the cap); when it exceeds
+    MEMORY_CONTEXT_MAX_TOKENS we set `over_cap` and trim whole notes (oldest
+    `updated` first — list_notes is newest-first) so we load UP TO the cap
+    rather than overflowing the context. The honest, named trigger for the
+    future embeddings phase — we do NOT build embeddings here.
+    """
+    notes = list_notes()  # newest-updated first, frontmatter only
+    rendered = []
+    for meta in notes:
+        note = read_note(meta["slug"])
+        if note is not None:
+            rendered.append(_render_note_for_context(note))
+
+    full_block = "\n\n".join(rendered)
+    tokens = _approx_tokens(full_block)
+    over_cap = tokens > MEMORY_CONTEXT_MAX_TOKENS
+
+    if over_cap:
+        kept, running = [], 0
+        for block in rendered:
+            t = _approx_tokens(block)
+            if running + t > MEMORY_CONTEXT_MAX_TOKENS:
+                break
+            kept.append(block)
+            running += t
+        block_text = "\n\n".join(kept)
+    else:
+        block_text = full_block
+
+    return {
+        "block": block_text,
+        "tokens": tokens,            # full-vault size, even when trimmed
+        "note_count": len(notes),
+        "max_tokens": MEMORY_CONTEXT_MAX_TOKENS,
+        "over_cap": over_cap,
+    }
+
+
+# --- Temporal recall: full-vault events scan (Phase 17) --------------------
+
+
+def collect_events() -> tuple[list[dict], int, bool]:
+    """Scan every note's `events` frontmatter and return a flat list of events
+    (each annotated with its note's title + slug), the number of notes scanned,
+    and whether the scan tripped MEMORY_EVENTS_MAX_NOTES.
+
+    Deliberately the same full-vault-scan pattern as assemble_memory_context;
+    the tripwire is the honest signal that the vault has outgrown a linear scan
+    and wants a derived index — we do NOT build that index here.
+    """
+    notes = list_notes()
+    over_cap = len(notes) > MEMORY_EVENTS_MAX_NOTES
+    out = []
+    for meta in notes:
+        for ev in meta["events"]:
+            if not ev.get("date"):
+                continue
+            out.append({
+                "date": ev["date"],
+                "kind": ev.get("kind", ""),
+                "title": meta["title"],
+                "slug": meta["slug"],
+            })
+    return out, len(notes), over_cap
