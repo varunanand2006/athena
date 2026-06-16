@@ -6,9 +6,9 @@
   --accent: #1E90FF; /* Pure tech blue */
   --accent-light: rgba(30, 144, 255, 0.2);
   --accent-hover: #4DA6FF;
-  --bg: #050505; /* Deep black core */
-  --bg-panel: rgba(10, 12, 16, 0.65); /* More translucent for glass */
-  --card: rgba(15, 20, 25, 0.45); /* More translucent for glass */
+  --bg: #030303; /* Deep black core */
+  --bg-panel: rgba(10, 12, 16, 0.45); /* Highly translucent for glass */
+  --card: rgba(15, 20, 25, 0.3); /* Highly translucent for glass */
   --border: rgba(30, 144, 255, 0.4); /* Brighter blue border */
   --text: #F0F8FF; /* AliceBlue for high tech feel */
   --text-muted: #8AA4C8; /* Cool gray-blue */
@@ -22,14 +22,16 @@
 /* Glassmorphism classes */
 .glass-panel {
   background: var(--bg-panel);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.05), inset -1px -1px 0 rgba(255, 255, 255, 0.01);
 }
 
 .glass-card {
   background: var(--card);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.04), inset -1px -1px 0 rgba(255, 255, 255, 0.01);
 }
 
 * {
@@ -39,16 +41,32 @@
 body {
   font-family: 'Rajdhani', system-ui, sans-serif;
   background-color: var(--bg);
-  /* Radial vignette + grid for classic HUD background */
-  background-image: 
-    radial-gradient(circle at center, rgba(30, 144, 255, 0.08) 0%, transparent 70%),
-    linear-gradient(rgba(30, 144, 255, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(30, 144, 255, 0.05) 1px, transparent 1px);
-  background-size: 100% 100%, 40px 40px, 40px 40px;
-  background-attachment: fixed;
   color: var(--text);
   margin: 0;
   padding: 0;
+}
+
+/* Interactive Dotted Background Layers */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+  z-index: -2;
+  pointer-events: none;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(rgba(30, 144, 255, 0.25) 1.5px, transparent 1.5px);
+  background-size: 32px 32px;
+  -webkit-mask-image: radial-gradient(400px circle at var(--mouse-x, 50vw) var(--mouse-y, 50vh), rgba(0,0,0,1) 0%, rgba(0,0,0,0) 80%);
+  mask-image: radial-gradient(400px circle at var(--mouse-x, 50vw) var(--mouse-y, 50vh), rgba(0,0,0,1) 0%, rgba(0,0,0,0) 80%);
+  z-index: -1;
+  pointer-events: none;
 }
 
 /* Custom Scrollbar for HUD feel */
