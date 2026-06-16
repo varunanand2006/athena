@@ -102,11 +102,22 @@ The /memory view has a delete button per note. Users can delete any note (explic
 - The user is the final authority over what's remembered.
 - Essential now that the agent captures without per-item approval.
 - Gives us visibility into what the agent decided (if users habitually delete certain types, we tune the prompt).
-- Combined with a source field (deferred to future work), users can see which notes are auto-captured and audit them.
+- Combined with the `source` field (below), users can see which notes are auto-captured and audit them.
 
 ---
 
-**7. Title/keyword retrieval only; embeddings deferred**
+**7. `source: explicit | auto` frontmatter + foreground stays explicit-only**
+
+Each note records its origin in a `source` frontmatter field, surfaced as a badge in /memory (**auto** vs **you**). Origin is preserved across updates (it's a property of the first write). Critically, the foreground chat agent must remain **explicit-only** — `write_memory` fires solely on an explicit user instruction — so that background reflection is the *sole* writer of `source: auto`.
+
+**Why:**
+- The `source` field is what makes autonomous capture auditable — the user can see exactly what the agent decided on its own and delete it if wrong. This is the trust valve that makes write-without-approval acceptable.
+- Implemented (not deferred): the gate explicitly requires confirming a note's `source` is `auto`, so it's load-bearing, not cosmetic.
+- The foreground had to be tightened because gpt-4o-mini was over-eagerly calling `write_memory` on passing mentions, capturing facts as `explicit` before reflection could capture them as `auto`. That mislabels origin AND bypasses the background-reflection design. Keeping the foreground explicit-only is what keeps `source` honest. **Consequence:** the explicit-only behavior depends on prompt adherence and should be re-verified on any future foreground-model swap.
+
+---
+
+**8. Title/keyword retrieval only; embeddings deferred**
 
 Recall remains title/tag/slug keyword matching. No embeddings in Phase 15.
 

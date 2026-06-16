@@ -1,6 +1,6 @@
 # Phase 15: Automatic Memory Capture
 
-**Status:** In progress
+**Status:** Complete (gates passed 2026-06-15)
 **Depends on:** Phase 14 (memory vault substrate)
 
 ## Goal
@@ -106,17 +106,16 @@ The user can delete any note (explicit or auto-captured), making them the final 
 ### agent/reflection.py
 
 New module with:
-- `reflect_on_conversation(conversation_id, title)` — the core reflection logic
+- `reflect_on_conversation(conversation_id, title)` — the core reflection logic; writes captured notes with `source="auto"` and sets `reflected_at` on success.
 - `get_due_conversations(exclude_ids)` — query conversations needing reflection
 - `_reflection_prompt(messages, memory_index)` — construct the prompt
-- `_parse_reflection_response(response_text)` — parse JSON decisions
+- `_parse_reflection_response(response_text)` — parse JSON decisions; resilient to markdown code fences and prose preamble (gemma4:e2b often ignores "JSON only"), falling back to extracting the outermost `[...]` array. A failed parse returns `[]` (capture nothing) rather than raising, so a malformed reflection never crashes the sweep.
 - Helper functions for loading history and memory index
 
-Token limits tuned for CPU Ollama:
-- `num_ctx: 2048`
-- `num_predict: 150`
-- Full conversation + memory index must fit in ~2000 tokens
-- If a conversation is unusually long, it's summarized before reflection (not yet implemented; current behavior overflows)
+Token budget — reflection is BACKGROUND, so unlike foreground chat (which uses `num_ctx: 2048, num_predict: 150` for speed) it trades CPU time for reliability:
+- `num_ctx: 4096` — fit the whole short conversation + the existing-memory index
+- `num_predict: 512` — emit a COMPLETE JSON array; truncating it would fail the parse and silently capture nothing
+- If a conversation is unusually long it can still overflow `num_ctx`; summarize-then-reflect is the planned mitigation (not yet implemented).
 
 ### agent/main.py
 
@@ -124,13 +123,24 @@ Changes:
 - Import reflection module and APScheduler.
 - Add `_trigger_reflection_sweep()` to spawn background threads for due conversations.
 - Hook it into `/chat` after a new conversation is created.
-- Add `_straggler_reflection_sweep()` for the 30-min interval job.
+- Add `_straggler_reflection_sweep()` for the 30-min interval job (timezone-AWARE threshold — `datetime.now(timezone.utc)`, since Postgres `timestamptz` returns aware datetimes and a naive comparison would crash the sweep).
 - Wrap both in a lifespan context manager for the scheduler.
 - Add `DELETE /memory/{slug}` endpoint.
+- `logging.basicConfig(level=logging.INFO)` so reflection's lifecycle is visible in pod logs (under uvicorn, app loggers default to WARNING and our `logger.info` lines would be silently dropped).
+- **Tightened the foreground MEMORY system prompt** (see below).
+
+### Foreground explicit-only prompt (the one non-obvious gotcha)
+
+The foreground chat model (gpt-4o-mini) was over-eager: on a passing mention like "I've got a Stripe interview," it would call `write_memory` itself and reply "I've noted that…" — capturing the fact as `source="explicit"` *before* background reflection could capture it as `source="auto"`. That both mislabels the source and defeats the background-reflection design. The fix is a stricter system prompt: `write_memory` fires ONLY on an explicit "remember/note/save" instruction; for passing mentions the agent must respond conversationally and must NOT claim it saved anything. Background reflection is then the *sole* auto-capturer, which keeps `source="auto"` honest and is what makes gate 1 pass through the real UI. **This prompt is the feature's quality knob** — expect to keep tuning both it and the reflection prompt.
 
 ### agent/pyproject.toml & Dockerfile
 
-Added `apscheduler>=3.10` to both places (as per CLAUDE.md lesson).
+Added `apscheduler>=3.10` to both places (as per CLAUDE.md lesson). `reflection.py` is `COPY`'d in the Dockerfile alongside `main.py` and `memory.py`.
+
+### agent/memory.py
+
+- Added the `source` frontmatter field (`explicit | auto`). Parse/render/`read_note`/`list_notes` all carry it; missing `source` defaults to `explicit` (any pre-Phase-15 note was, by definition, an explicit write).
+- `write_note(..., source=...)` records origin on create and **preserves the existing note's source on update** — origin is a property of the first write, so an auto-reflection touching a user-written note keeps it `explicit` (and vice versa).
 
 ### frontend/MemoryView.tsx
 
@@ -139,6 +149,7 @@ Changes:
 - Confirmation dialog before deletion.
 - After successful delete, refresh the notes list and clear selection.
 - Add trash button (✕) to the note header.
+- `SourceBadge` component — shows **auto** (amber) vs **you** (gray) per note in both the list and the detail header, so the user can audit what the agent captured on its own.
 
 ## Database Migration
 
@@ -151,26 +162,26 @@ ALTER TABLE conversations
 
 Idempotent. Existing conversations have `reflected_at = NULL`, so they're all initially due for reflection.
 
-## Gate Checklist
+## Gate Checklist — ALL PASSED (2026-06-15)
 
-The phase is complete when:
+1. **Auto-capture works** ✅ — "I've got a Stripe interview coming up… nervous about system design" (no "remember") → starting a new conversation triggered reflection, which created `stripe-interview-prep.md` with `source: auto`. Verified in logs (`capturing 1 memories` → `Created note 'Stripe Interview Prep' [source=auto]`), the vault, and the **auto** badge in /memory.
 
-1. **Auto-capture works:** Have a conversation mentioning something durable without saying "remember". Start a new conversation. Confirm a memory note gets auto-created (check /memory view and the vault).
+2. **Re-reflection updates in place** ✅ — adding "the interview got moved to next Friday" to the same conversation and starting a new one re-reflected it; the SAME note was UPDATED (log showed `Updated note`, not a second slug), content appended, `reflected_at` advanced. No duplicate.
 
-2. **Re-reflection updates in place:** Go back to the first conversation, add new messages with additional durable info. Start another new conversation. Confirm the same note is UPDATED in place (not duplicated), with new content, and `reflected_at` advanced.
+3. **Conservative policy works** ✅ — a pure small-talk conversation reflected to `no memories to capture`; nothing written, conversation still marked reflected.
 
-3. **Conservative policy works:** Have a conversation of pure small talk or a one-off question. Start a new conversation. Confirm NOTHING is written, but the conversation is still marked reflected.
+4. **PII exclusion works** ✅ — a passing mention of a fake API key + bank balance was NOT captured to the vault.
 
-4. **PII exclusion works:** Mention something sensitive (fake API key, financial detail) in passing. Confirm it is NOT auto-captured.
+5. **Delete affordance works** ✅ — deleting an auto-written note via the /memory trash button removed it from the vault.
 
-5. **Delete affordance works:** Delete an auto-written note from /memory. Confirm the file is removed from the vault and the vault reloads without it.
+Note: passing gate 1 *through the real UI* depended on the foreground explicit-only prompt fix (above). Before that fix, the foreground agent pre-captured the fact as `source: explicit`, which would have failed the "source is auto" check.
 
 ## Known Limitations & Future Work
 
-- **Token overflow on very long conversations:** The reflection prompt is sized for ~2000 tokens (CPU Ollama). Extremely long conversations overflow. Mitigation: pass a summarized view of the conversation instead of full history (not yet implemented).
+- **Token overflow on very long conversations:** Reflection fits the conversation + memory index into `num_ctx: 4096`. Extremely long conversations still overflow. Mitigation: summarize-then-reflect (not yet implemented).
 - **No embedding-based retrieval yet:** Memory index is title/keyword only. Phase 16+ will add dense vector retrieval for semantic matching.
 - **No automatic recall improvement:** Reflection captures memories, but the agent's recall of those memories in future chats is unchanged (title/tag keyword search). Phase 16 will improve recall with embeddings and automatic search on relevant turns.
-- **No `source` field in frontmatter yet:** Phase 15 end-to-end works but the source (explicit vs auto) field recommended in the spec is deferred. Useful for tuning trust but not strictly necessary.
+- **Foreground prompt adherence is model-dependent:** the explicit-only rule relies on gpt-4o-mini obeying the system prompt. It's tightened and holds in testing, but a future model swap should re-verify the foreground doesn't auto-save (watch for `source: explicit` notes appearing from passing mentions).
 
 ## Docs
 
