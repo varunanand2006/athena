@@ -20,6 +20,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import memory as memory_vault
 import reflection
 
+# Make application INFO logs visible. Under uvicorn, app loggers default to
+# WARNING (our reflection logger.info lines would be silently dropped), which
+# makes auto-capture impossible to observe. basicConfig adds a root handler at
+# INFO so reflection's lifecycle (capturing N memories / created note …) prints.
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -445,14 +450,22 @@ SYSTEM_PROMPT = (
     "patterns, or what to study next, you MUST call lookup_leetcode before answering. "
     "For questions about current events, job listings, prices, or recent news, "
     "you MUST call web_search before answering. "
-    "MEMORY: when the user explicitly tells you to remember, note, or save "
-    "something (\"remember that...\", \"make a note that...\", \"save this\"), you "
-    "MUST call write_memory with a short descriptive title and the content. Do "
-    "NOT call write_memory otherwise — never save memories on your own initiative "
-    "this phase. When a question might be answered by something the user asked you "
-    "to remember (e.g. \"what am I prepping for?\", \"what did I apply to?\"), call "
-    "search_memory (or list_memories first, then search) before answering, and "
-    "answer from the note's content. "
+    "MEMORY — read this carefully. The write_memory tool is ONLY for when the "
+    "user gives you an EXPLICIT save instruction using words like \"remember "
+    "that...\", \"make a note that...\", or \"save this\". In that case you MUST "
+    "call write_memory with a short descriptive title and the content. In EVERY "
+    "other case you MUST NOT call write_memory. If the user merely mentions a "
+    "fact, a goal, an interview, or how they're feeling in passing — e.g. \"I "
+    "have a Stripe interview coming up\" or \"I'm trying to hit 500 LeetCode "
+    "problems\" — WITHOUT explicitly asking you to save it, do NOT call "
+    "write_memory, and do NOT say things like \"I've noted that\" or \"I'll "
+    "remember that\". Just respond conversationally. Athena captures durable "
+    "facts automatically in the background; foreground saving is NOT your job "
+    "and doing it on your own initiative is a mistake. "
+    "When a question might be answered by something stored in memory (e.g. "
+    "\"what am I prepping for?\", \"what did I apply to?\"), call search_memory "
+    "(or list_memories first, then search) before answering, and answer from the "
+    "note's content. "
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
