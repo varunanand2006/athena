@@ -42,7 +42,7 @@ export default function SystemView() {
 
   return (
     <div className="h-full overflow-y-auto" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
           System
         </h1>
@@ -147,8 +147,8 @@ function DataSection({ data }: { data: SystemHealth['data'] }) {
 function Card({ title, value, children }: { title: string; value: number; children?: React.ReactNode }) {
   return (
     <div
-      className="rounded-2xl p-5 flex flex-col gap-2"
-      style={{ background: 'var(--card)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
+      className="rounded-2xl p-5 flex flex-col gap-2 glass-panel"
+      style={{ boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
     >
       <p className="text-xs uppercase tracking-wider font-medium" style={{ color: 'var(--text-muted)' }}>
         {title}

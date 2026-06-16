@@ -92,7 +92,7 @@ export default function MemoryView() {
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
           Memory
         </h1>
@@ -104,8 +104,8 @@ export default function MemoryView() {
       <div className="flex-1 flex overflow-hidden">
         {/* Note list */}
         <div
-          className="w-72 shrink-0 overflow-y-auto"
-          style={{ borderRight: '1px solid var(--border)', background: 'var(--card)' }}
+          className="w-72 shrink-0 overflow-y-auto glass-panel"
+          style={{ borderRight: '1px solid var(--border)' }}
         >
           <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
             <span className="font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
@@ -182,8 +182,8 @@ export default function MemoryView() {
           )}
           {!loadingNote && selected && (
             <div
-              className="rounded-2xl p-6 max-w-3xl"
-              style={{ background: 'var(--card)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
+              className="rounded-2xl p-6 max-w-3xl glass-card"
+              style={{ boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-2">

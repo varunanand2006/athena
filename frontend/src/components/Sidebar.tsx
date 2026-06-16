@@ -100,8 +100,8 @@ export default function Sidebar({
 
   return (
     <aside
-      className="w-56 shrink-0 flex flex-col h-full"
-      style={{ background: 'var(--bg-panel)', borderRight: '1px solid var(--border)' }}
+      className="w-56 shrink-0 flex flex-col h-full glass-panel"
+      style={{ borderRight: '1px solid var(--border)' }}
     >
       {/* Logo */}
       <div className="px-5 pt-5 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>

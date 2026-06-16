@@ -109,7 +109,7 @@ export default function ChatView({
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--bg)' }}>
       {/* Header */}
-      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>Chat</h1>
         <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Ask Athena anything</p>
       </div>
@@ -137,7 +137,7 @@ export default function ChatView({
           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`flex flex-col max-w-[72%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
               <div
-                className={`px-4 py-3 rounded-2xl text-sm ${msg.role === 'user' ? 'text-white rounded-br-sm' : 'rounded-bl-sm'}`}
+                className={`px-4 py-3 rounded-2xl text-sm ${msg.role === 'user' ? 'text-white rounded-br-sm' : 'rounded-bl-sm glass-card'}`}
                 style={
                   msg.role === 'user'
                     ? { 
@@ -146,7 +146,6 @@ export default function ChatView({
                         border: '1px solid rgba(255,255,255,0.15)' 
                       }
                     : {
-                        background: 'var(--card)',
                         boxShadow: 'var(--shadow-md)',
                         border: '1px solid var(--border)',
                       }
@@ -170,9 +169,8 @@ export default function ChatView({
         {loading && (
           <div className="flex justify-start">
             <div
-              className="rounded-2xl rounded-bl-sm"
+              className="rounded-2xl rounded-bl-sm glass-card"
               style={{
-                background: 'var(--card)',
                 boxShadow: 'var(--shadow)',
                 border: '1px solid var(--border)',
               }}
@@ -197,10 +195,10 @@ export default function ChatView({
       </div>
 
       {/* Input bar */}
-      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderTop: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderTop: '1px solid var(--border)' }}>
         <div
-          className="flex items-end gap-3 rounded-2xl px-4 py-3 transition-colors"
-          style={{ background: 'var(--bg)', border: '1.5px solid var(--border)' }}
+          className="flex items-end gap-3 rounded-2xl px-4 py-3 transition-colors glass-panel"
+          style={{ border: '1.5px solid var(--border)' }}
           onFocus={(e) => {
             ;(e.currentTarget as HTMLDivElement).style.borderColor = 'var(--accent)'
             ;(e.currentTarget as HTMLDivElement).style.boxShadow = 'var(--glow)'

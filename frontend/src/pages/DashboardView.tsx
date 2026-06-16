@@ -29,8 +29,8 @@ interface LeetCodeStats {
 function Card({ title, badge, children }: { title: string; badge?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div
-      className="rounded-2xl p-5 flex flex-col gap-3"
-      style={{ background: 'var(--card)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
+      className="rounded-2xl p-5 flex flex-col gap-3 glass-card"
+      style={{ boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
     >
       <div className="flex items-center justify-between gap-2">
         <h2 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
@@ -112,8 +112,8 @@ function InternshipCard() {
           {data.map((item) => (
             <div
               key={item.id}
-              className="p-3 rounded-xl flex flex-col gap-1.5"
-              style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
+              className="p-3 rounded-xl flex flex-col gap-1.5 glass-card"
+              style={{ border: '1px solid var(--border)' }}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -279,7 +279,7 @@ function ActivityCard({ messages }: { messages: Message[] }) {
 export default function DashboardView({ messages }: { messages: Message[] }) {
   return (
     <div className="h-full overflow-y-auto" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>Dashboard</h1>
         <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
           Pipeline overview

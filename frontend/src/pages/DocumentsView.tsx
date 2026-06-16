@@ -139,7 +139,7 @@ export default function DocumentsView() {
 
   return (
     <div className="h-full overflow-y-auto" style={{ background: 'var(--bg)' }}>
-      <div className="px-6 py-4 shrink-0" style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border)' }}>
+      <div className="px-6 py-4 shrink-0 glass-panel" style={{ borderBottom: '1px solid var(--border)' }}>
         <h1 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
           Documents
         </h1>
@@ -154,9 +154,8 @@ export default function DocumentsView() {
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
-          className="rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors"
+          className={`rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors ${hovering ? 'glass-card' : 'glass-panel'}`}
           style={{
-            background: hovering ? 'var(--accent-light)' : 'var(--card)',
             border: `2px dashed ${hovering ? 'var(--accent)' : 'var(--border)'}`,
             boxShadow: 'var(--shadow-md)',
           }}
@@ -185,8 +184,8 @@ export default function DocumentsView() {
         {/* Upload status */}
         {uploading.length > 0 && (
           <div
-            className="rounded-xl p-3 flex flex-col gap-1"
-            style={{ background: 'var(--card)', border: '1px solid var(--border)' }}
+            className="rounded-xl p-3 flex flex-col gap-1 glass-card"
+            style={{ border: '1px solid var(--border)' }}
           >
             {uploading.map((name) => (
               <div key={name} className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
@@ -202,8 +201,8 @@ export default function DocumentsView() {
 
         {/* Catalog table */}
         <div
-          className="rounded-2xl overflow-hidden"
-          style={{ background: 'var(--card)', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
+          className="rounded-2xl overflow-hidden glass-card"
+          style={{ boxShadow: 'var(--shadow-md)', border: '1px solid var(--border)' }}
         >
           <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
             <h2 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
