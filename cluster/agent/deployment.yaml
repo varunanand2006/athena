@@ -24,7 +24,7 @@ spec:
             claimName: agent-memory
       containers:
         - name: agent
-          image: athena-agent:phase14
+          image: athena-agent:phase15
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
