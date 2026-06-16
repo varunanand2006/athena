@@ -75,7 +75,7 @@ export default function App() {
                 />
               }
             />
-            <Route path="/dashboard" element={<DashboardView messages={messages} />} />
+            <Route path="/dashboard" element={<DashboardView />} />
             <Route path="/documents" element={<DocumentsView />} />
             <Route path="/memory" element={<MemoryView />} />
             <Route path="/system" element={<SystemView />} />

@@ -406,7 +406,7 @@ function MemoryCard() {
 
 // ---- Dashboard layout -----------------------------------------------------
 
-export default function DashboardView({ messages }: { messages: Message[] }) {
+export default function DashboardView() {
   return (
     <div className="h-full overflow-y-auto bg-transparent pt-8">
       <div className="px-8 pb-8 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start z-10">
