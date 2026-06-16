@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import ChatView from './pages/ChatView'
 import DashboardView from './pages/DashboardView'
 import DocumentsView from './pages/DocumentsView'
+import HomeView from './pages/HomeView'
 import MemoryView from './pages/MemoryView'
 import SystemView from './pages/SystemView'
 
@@ -63,8 +64,9 @@ export default function App() {
           style={{ marginLeft: sidebarCollapsed ? '100px' : '268px' }}
         >
           <Routes>
+            <Route path="/" element={<HomeView />} />
             <Route
-              path="/"
+              path="/chat"
               element={
                 <ChatView
                   messages={messages}
