@@ -22,6 +22,10 @@ kubeconfig
 *-secret.yaml
 secret.yaml
 
+# OAuth client files / tokens (Phase 19 Gmail mint flow — never commit)
+client_secret*.json
+token.json
+
 # Generated seed vault (reproducible via scripts/seed_memory.py)
 scripts/seed-vault/
 

@@ -18,6 +18,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 from apscheduler.schedulers.background import BackgroundScheduler
 
+import gmail_client
 import memory as memory_vault
 import reflection
 
@@ -496,11 +497,46 @@ def upcoming(timeframe: str = "week") -> str:
     return "\n".join(lines)
 
 
+# --- Read-only email lookup (Phase 19) -------------------------------------
+# Gmail is an on-demand lookup source like load_document/lookup_leetcode, NOT a
+# memory source — it does not feed the vault, reflection, or events this phase.
+# The underlying client (gmail_client.py) holds ONLY the gmail.readonly scope;
+# there is no send/draft/delete/modify/label path anywhere.
+
+
+@tool
+def search_email(query: str) -> str:
+    """Search the user's Gmail inbox READ-ONLY and return a compact digest of
+    matching messages (sender, subject, date, short snippet). Use this for
+    questions like "did <person/company> email/reply?", "what did the recruiter
+    say?", or "find the email about <topic>". Accepts Gmail search syntax —
+    e.g. from:stripe, subject:interview, newer_than:7d, "exact phrase". This is
+    READ-ONLY: you can search and read email but CANNOT send, draft, reply,
+    delete, or label anything. Returns up to 10 messages; answer from them."""
+    try:
+        messages = gmail_client.search_messages(query, max_results=10)
+    except gmail_client.GmailNotConfigured as e:
+        return str(e)
+    except Exception as e:
+        return f"Email search failed: {e}"
+
+    if not messages:
+        return f"No emails matched '{query}'."
+
+    lines = [f"{len(messages)} email(s) matching '{query}':"]
+    for m in messages:
+        date = (m["date"] or "")[:31]
+        lines.append(f"- From: {m['from']} | {m['subject']} | {date}")
+        if m["snippet"]:
+            lines.append(f"  {m['snippet']}")
+    return "\n".join(lines)
+
+
 SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
     "You have access to these tools: web_search, find_documents, load_document, "
     "lookup_leetcode, list_documents, get_table_of_contents, get_document_summary, "
-    "write_memory, list_memories, search_memory, and upcoming. "
+    "write_memory, list_memories, search_memory, upcoming, and search_email. "
     "For content questions about the user's own documents — background, resume, skills, "
     "projects, notes — follow this two-step flow: (1) call find_documents(query) to "
     "identify the relevant document(s) by summary similarity, then (2) call "
@@ -537,6 +573,13 @@ SYSTEM_PROMPT = (
     "week?\", \"any deadlines soon?\", \"what's on my calendar?\" — you MUST call "
     "upcoming with an appropriate timeframe and answer from the dated events it "
     "returns, rather than guessing from memory text. "
+    "For questions about the user's EMAIL — \"did <person/company> reply?\", "
+    "\"what did the recruiter say?\", \"find the email about <topic>\", \"any "
+    "emails from <sender>?\" — you MUST call search_email (Gmail search syntax "
+    "like from:, subject:, newer_than: works) and answer from the matching "
+    "messages. Email access is READ-ONLY: you can search and read mail but you "
+    "CANNOT send, draft, reply to, delete, or label email — never claim or offer "
+    "to do any of those. "
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
@@ -707,6 +750,7 @@ async def chat(req: ChatRequest):
                 list_memories,
                 search_memory,
                 upcoming,
+                search_email,
             ],
             prompt=prompt,
         )
