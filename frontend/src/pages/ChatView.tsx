@@ -113,18 +113,15 @@ export default function ChatView({
       <div className="flex-1 overflow-y-auto px-8 pb-4 space-y-6 scroll-smooth z-10">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center select-none">
-            <div
-              className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-2xl mb-6 glow-pulse"
-              style={{ background: 'var(--accent)', boxShadow: 'var(--glow)' }}
-            >
-              A
+            <div className="flex items-center justify-center mb-6" style={{ transform: 'scale(2.5)' }}>
+              <div className="siri-orb-container">
+                <div className="siri-blob"></div>
+                <div className="siri-blob"></div>
+                <div className="siri-blob"></div>
+                <div className="siri-blob"></div>
+                <div className="siri-blob"></div>
+              </div>
             </div>
-            <p className="font-bold text-xl uppercase tracking-wider" style={{ color: 'var(--text)', textShadow: 'var(--glow)' }}>
-              Awaiting Input
-            </p>
-            <p className="text-sm mt-2 max-w-md" style={{ color: 'var(--text-muted)' }}>
-              Connect to the Athena mainframe. Query documentation, check system status, or run pipeline diagnostics.
-            </p>
           </div>
         )}
 

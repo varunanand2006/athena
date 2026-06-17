@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import type { Message } from '../App'
 
@@ -30,7 +30,7 @@ export default function Sidebar({
   isCollapsed,
   setIsCollapsed
 }: Props) {
-  const [agentOnline, setAgentOnline] = useState<boolean | null>(null)
+  const navigate = useNavigate()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
@@ -48,20 +48,6 @@ export default function Sidebar({
   }, [fetchConversations, refreshRef])
 
   useEffect(() => {
-    async function checkHealth() {
-      try {
-        await axios.get('/healthz', { timeout: 3000 })
-        setAgentOnline(true)
-      } catch {
-        setAgentOnline(false)
-      }
-    }
-    checkHealth()
-    const id = setInterval(checkHealth, 30_000)
-    return () => clearInterval(id)
-  }, [])
-
-  useEffect(() => {
     fetchConversations()
   }, [fetchConversations])
 
@@ -77,8 +63,10 @@ export default function Sidebar({
         timestamp: new Date(m.created_at),
       }))
       onConversationSelect(conv.id, loaded)
+      navigate('/chat')
     } catch {
       onConversationSelect(conv.id, [])
+      navigate('/chat')
     }
   }
 
@@ -95,9 +83,6 @@ export default function Sidebar({
     }
   }
 
-  const statusColor = agentOnline === null ? '#FACC15' : agentOnline ? '#4ADE80' : '#F87171'
-  const statusLabel = agentOnline === null ? 'Connecting…' : agentOnline ? 'Agent online' : 'Agent offline'
-
   return (
     <aside
       className={`shrink-0 flex flex-col glass-panel transition-all duration-300 fixed z-50 rounded-2xl overflow-hidden`}
@@ -112,11 +97,8 @@ export default function Sidebar({
     >
       {/* Logo */}
       <div className={`px-4 pt-5 pb-4 flex flex-col ${isCollapsed ? 'items-center' : ''}`} style={{ borderBottom: '1px solid var(--border)' }}>
-        <NavLink to="/" end className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} mb-3 cursor-pointer`}>
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(0, 243, 255, 0.2)', boxShadow: 'inset 0 0 10px rgba(0, 243, 255, 0.1)' }}
-          >
+        <NavLink to="/" end className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} mb-1 cursor-pointer`}>
+          <div className="w-8 h-8 flex items-center justify-center shrink-0">
             <div className="siri-orb-container">
               <div className="siri-blob"></div>
               <div className="siri-blob"></div>
@@ -127,17 +109,6 @@ export default function Sidebar({
           </div>
           {!isCollapsed && <span className="font-bold text-lg tracking-widest" style={{ color: 'var(--text)', textShadow: 'var(--glow)', textTransform: 'uppercase' }}>Athena</span>}
         </NavLink>
-        {!isCollapsed && (
-          <div className="flex items-center gap-1.5 ml-1">
-            <div
-              className="w-1.5 h-1.5 rounded-full shrink-0"
-              style={{ background: statusColor, boxShadow: `0 0 6px ${statusColor}80` }}
-            />
-            <span className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-              {statusLabel}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* Nav links */}
