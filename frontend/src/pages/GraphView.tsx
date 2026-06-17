@@ -23,8 +23,8 @@ interface GNode {
 
 interface GEdge { source: string; target: string }
 
-const AUTO = '#f59e0b'   // synthesized (auto) notes — amber
-const YOU = '#1e90ff'    // explicit (you) notes — accent blue
+const AUTO = '#ffb000'   // synthesized (auto) notes — neon amber
+const YOU = '#00f3ff'    // explicit (you) notes — neon cyan
 
 function radius(degree: number): number {
   return 5 + Math.sqrt(degree) * 2.6
@@ -35,6 +35,25 @@ export default function GraphView() {
   const [error, setError] = useState(false)
   const [, setTick] = useState(0)
   const [hover, setHover] = useState<string | null>(null)
+  const [hoverDetail, setHoverDetail] = useState<{slug: string, summary: string} | null>(null)
+
+  useEffect(() => {
+    if (!hover) {
+      setHoverDetail(null)
+      return
+    }
+    const targetSlug = hover
+    const timer = setTimeout(async () => {
+      try {
+        const res = await axios.get<{body: string}>(`/memory/${targetSlug}`)
+        const text = res.data.body.replace(/[#*`_[\]]/g, '').substring(0, 150).trim()
+        setHoverDetail({ slug: targetSlug, summary: text + (res.data.body.length > 150 ? '...' : '') })
+      } catch {
+        // ignore
+      }
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [hover])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const nodesRef = useRef<GNode[]>([])
@@ -229,7 +248,7 @@ export default function GraphView() {
         <div
           ref={containerRef}
           className="relative h-full w-full rounded-3xl overflow-hidden glass-panel"
-          style={{ border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)', cursor: 'grab' }}
+          style={{ border: '1px solid rgba(0, 243, 255, 0.2)', boxShadow: '0 0 30px rgba(0, 243, 255, 0.05) inset', cursor: 'grab', background: 'rgba(2, 6, 15, 0.7)' }}
         >
           {loading && (
             <p className="absolute inset-0 flex items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
@@ -256,6 +275,20 @@ export default function GraphView() {
               onWheel={onWheel}
               style={{ display: 'block' }}
             >
+              <defs>
+                <filter id="jarvis-glow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(0, 243, 255, 0.04)" strokeWidth="1"/>
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#grid)" />
               <g transform={`translate(${view.tx},${view.ty}) scale(${view.scale})`}>
                 {edges.map((e, i) => {
                   const a = nodes.find((n) => n.slug === e.source)
@@ -266,9 +299,10 @@ export default function GraphView() {
                     <line
                       key={i}
                       x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                      stroke="var(--text-muted)"
-                      strokeWidth={lit ? 1.4 : 0.7}
-                      strokeOpacity={lit ? 0.5 : 0.12}
+                      stroke={lit ? '#00f3ff' : 'rgba(0, 243, 255, 0.15)'}
+                      strokeWidth={lit ? 1.5 : 0.5}
+                      strokeOpacity={lit ? 0.6 : 0.3}
+                      style={{ filter: lit ? 'url(#jarvis-glow)' : 'none', transition: 'stroke-opacity 0.3s' }}
                     />
                   )
                 })}
@@ -289,20 +323,22 @@ export default function GraphView() {
                       <circle
                         r={r}
                         fill={color}
-                        fillOpacity={lit ? 0.92 : 0.25}
-                        stroke={n.slug === hover ? 'var(--text)' : color}
-                        strokeWidth={n.slug === hover ? 2 : 0}
+                        fillOpacity={lit ? 0.9 : 0.15}
+                        stroke={n.slug === hover ? '#fff' : color}
+                        strokeWidth={n.slug === hover ? 2 : 1}
+                        style={{ filter: lit ? 'url(#jarvis-glow)' : 'none', transition: 'fill-opacity 0.3s' }}
                       />
                       {showLabel && (
                         <text
-                          x={r + 3}
-                          y={3}
-                          fontSize={10}
-                          fill="var(--text)"
-                          fillOpacity={lit ? 0.95 : 0.3}
-                          style={{ pointerEvents: 'none', userSelect: 'none' }}
+                          x={r + 6}
+                          y={4}
+                          fontSize={11}
+                          fontFamily="monospace"
+                          fill={lit ? '#fff' : 'rgba(0, 243, 255, 0.5)'}
+                          fillOpacity={lit ? 1 : 0.5}
+                          style={{ pointerEvents: 'none', userSelect: 'none', filter: lit ? 'url(#jarvis-glow)' : 'none' }}
                         >
-                          {n.title}
+                          {n.title.toUpperCase()}
                         </text>
                       )}
                     </g>
@@ -314,45 +350,64 @@ export default function GraphView() {
 
           {/* Legend + controls overlay */}
           {!loading && !error && nodes.length > 0 && (
-            <div className="absolute top-4 left-4 flex flex-col gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-              <div className="flex items-center gap-3 px-3 py-1.5 rounded-lg glass-card" style={{ border: '1px solid var(--border)' }}>
-                <span className="flex items-center gap-1.5"><Dot color={YOU} /> you</span>
-                <span className="flex items-center gap-1.5"><Dot color={AUTO} /> auto</span>
-                <span>· {nodes.length} notes, {edges.length} links</span>
+            <div className="absolute top-4 left-4 flex flex-col gap-2 text-xs font-mono">
+              <div className="flex items-center gap-4 px-4 py-2 rounded-lg" style={{ background: 'rgba(2, 6, 23, 0.7)', border: '1px solid rgba(0, 243, 255, 0.3)', color: '#00f3ff', backdropFilter: 'blur(4px)', boxShadow: '0 0 10px rgba(0, 243, 255, 0.1)' }}>
+                <span className="flex items-center gap-2 tracking-widest"><Dot color={YOU} /> USER</span>
+                <span className="flex items-center gap-2 tracking-widest"><Dot color={AUTO} /> SYS</span>
+                <span className="opacity-60 ml-2 tracking-widest">[{nodes.length} N // {edges.length} E]</span>
               </div>
             </div>
           )}
 
-          <div className="absolute top-4 right-4 flex gap-2">
+          <div className="absolute top-4 right-4 flex gap-2 font-mono">
             <button
               onClick={resetView}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium glass-card transition-colors hover:opacity-80"
-              style={{ border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:bg-[rgba(0,243,255,0.1)]"
+              style={{ border: '1px solid rgba(0, 243, 255, 0.3)', color: '#00f3ff', background: 'rgba(2, 6, 23, 0.7)', backdropFilter: 'blur(4px)', boxShadow: '0 0 10px rgba(0, 243, 255, 0.1)' }}
               title="Reset view"
             >
-              Reset
+              [ RECALIBRATE ]
             </button>
           </div>
 
           {/* Hover detail */}
           {hoverNode && (
             <div
-              className="absolute bottom-4 left-4 px-3 py-2 rounded-lg glass-card max-w-xs"
-              style={{ border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)' }}
+              className="absolute bottom-6 left-6 p-4 rounded-xl max-w-sm font-mono"
+              style={{ 
+                background: 'rgba(2, 6, 23, 0.85)', 
+                border: `1px solid ${hoverNode.source === 'auto' ? AUTO : YOU}`, 
+                boxShadow: `0 0 20px ${hoverNode.source === 'auto' ? AUTO : YOU}40`,
+                backdropFilter: 'blur(8px)',
+                zIndex: 50
+              }}
             >
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3 mb-3 pb-2" style={{ borderBottom: `1px solid rgba(${hoverNode.source === 'auto' ? '255, 176, 0' : '0, 243, 255'}, 0.3)` }}>
                 <Dot color={hoverNode.source === 'auto' ? AUTO : YOU} />
-                <span className="font-semibold text-sm" style={{ color: 'var(--text)' }}>{hoverNode.title}</span>
+                <span className="font-bold text-sm tracking-wider" style={{ color: '#fff', textShadow: `0 0 8px ${hoverNode.source === 'auto' ? AUTO : YOU}` }}>
+                  {hoverNode.title.toUpperCase()}
+                </span>
               </div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                {hoverNode.degree} link{hoverNode.degree === 1 ? '' : 's'}
-                {hoverNode.tags.length > 0 ? ` · ${hoverNode.tags.join(', ')}` : ''}
+              
+              <div className="text-xs mb-3 leading-relaxed min-h-[40px]" style={{ color: 'rgba(255, 255, 255, 0.7)' }}>
+                {hoverDetail?.slug === hoverNode.slug ? hoverDetail.summary : 'INITIALIZING SCAN...'}
+              </div>
+
+              <div className="text-[10px] uppercase tracking-widest flex flex-col gap-1.5" style={{ color: hoverNode.source === 'auto' ? AUTO : YOU }}>
+                <div className="flex justify-between">
+                  <span className="opacity-70">TOPOLOGY:</span>
+                  <span>{hoverNode.degree} CONNECTION{hoverNode.degree === 1 ? '' : 'S'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70">VECTORS:</span>
+                  <span>{hoverNode.tags.length > 0 ? hoverNode.tags.join(' // ') : 'NONE'}</span>
+                </div>
               </div>
             </div>
           )}
 
-          <div className="absolute bottom-4 right-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-            drag nodes · scroll to zoom · drag background to pan
+          <div className="absolute bottom-4 right-4 text-[10px] font-mono tracking-widest" style={{ color: 'rgba(0, 243, 255, 0.5)' }}>
+            DRAG NODES // SCROLL ZOOM // PAN CANVAS
           </div>
         </div>
       </div>
@@ -361,5 +416,5 @@ export default function GraphView() {
 }
 
 function Dot({ color }: { color: string }) {
-  return <span className="inline-block w-2 h-2 rounded-full" style={{ background: color, boxShadow: `0 0 6px ${color}80` }} />
+  return <span className="inline-block w-2 h-2 rounded-full" style={{ background: color, boxShadow: `0 0 8px ${color}` }} />
 }
