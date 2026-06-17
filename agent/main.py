@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 import httpx
 import psycopg2
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
@@ -866,6 +867,145 @@ async def chat(req: ChatRequest):
         return ChatResponse(response=response_text, conversation_id=conversation_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """SSE streaming endpoint — emits token, tool_start, tool_end, done events.
+
+    Uses LangGraph's astream_events(version="v2") to iterate over the agent's
+    internal events as they happen. The frontend reads these as an EventSource
+    and renders tokens word-by-word + shows tool calls in a "thought process" UI.
+    """
+    import json
+
+    # --- conversation bookkeeping (identical to /chat) ---
+    try:
+        conn = pg_conn()
+        is_new_conversation = False
+        try:
+            with conn.cursor() as cur:
+                if req.conversation_id is None:
+                    title = req.message[:40]
+                    cur.execute(
+                        "INSERT INTO conversations (title) VALUES (%s) RETURNING id",
+                        (title,),
+                    )
+                    conversation_id = str(cur.fetchone()[0])
+                    is_new_conversation = True
+                    history = []
+                else:
+                    conversation_id = req.conversation_id
+                    cur.execute(
+                        "SELECT role, content FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
+                        (conversation_id,),
+                    )
+                    history = [{"role": row[0], "content": row[1]} for row in cur.fetchall()]
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        async def error_gen():
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        return StreamingResponse(error_gen(), media_type="text/event-stream")
+
+    messages = history + [{"role": "user", "content": req.message}]
+    llm = get_llm(req.mode)
+    prompt = _build_chat_system_prompt() if req.mode == "chat" else SYSTEM_PROMPT
+    agent = create_react_agent(
+        llm,
+        tools=[
+            web_search,
+            find_documents,
+            load_document,
+            lookup_leetcode,
+            list_documents,
+            get_table_of_contents,
+            get_document_summary,
+            write_memory,
+            list_memories,
+            search_memory,
+            upcoming,
+            search_email,
+            get_calendar_events,
+        ],
+        prompt=prompt,
+    )
+
+    async def event_generator():
+        response_text = ""
+        try:
+            async for event in agent.astream_events(
+                {"messages": messages}, version="v2"
+            ):
+                kind = event.get("event", "")
+                name = event.get("name", "")
+
+                # LLM token streaming
+                if kind == "on_chat_model_stream":
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        token = chunk.content
+                        response_text += token
+                        yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
+
+                # Tool call starts
+                elif kind == "on_tool_start":
+                    tool_input = event.get("data", {}).get("input", {})
+                    yield f"event: tool_start\ndata: {json.dumps({'tool': name, 'input': tool_input})}\n\n"
+
+                # Tool call ends
+                elif kind == "on_tool_end":
+                    tool_output = event.get("data", {}).get("output", "")
+                    # Truncate long tool outputs to keep SSE payloads reasonable
+                    if isinstance(tool_output, str) and len(tool_output) > 500:
+                        tool_output = tool_output[:500] + "..."
+                    yield f"event: tool_end\ndata: {json.dumps({'tool': name, 'output': str(tool_output)})}\n\n"
+
+            # Persist messages to Postgres
+            conn = pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
+                        (conversation_id, "user", req.message),
+                    )
+                    cur.execute(
+                        "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
+                        (conversation_id, "assistant", response_text),
+                    )
+                    cur.execute(
+                        "UPDATE conversations SET updated_at = now() WHERE id = %s",
+                        (conversation_id,),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            # Trigger reflection on new-conversation boundary
+            if is_new_conversation:
+                thread = threading.Thread(
+                    target=_trigger_reflection_sweep,
+                    args=(conversation_id,),
+                    daemon=True,
+                )
+                thread.start()
+
+            yield f"event: done\ndata: {json.dumps({'response': response_text, 'conversation_id': conversation_id})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # tells nginx to not buffer
+        },
+    )
 
 
 @app.get("/conversations")

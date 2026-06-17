@@ -7,11 +7,19 @@ import HomeView from './pages/HomeView'
 import LibraryView from './pages/LibraryView'
 import SystemView from './pages/SystemView'
 
+export interface ToolCall {
+  tool: string
+  input: Record<string, unknown>
+  output?: string
+  status: 'running' | 'done'
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
+  toolCalls?: ToolCall[]
 }
 
 export default function App() {

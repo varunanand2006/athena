@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/chat/stream': 'http://agent.local',
       '/chat': 'http://agent.local',
       '/conversations': 'http://agent.local',
       '/internships': 'http://agent.local',
