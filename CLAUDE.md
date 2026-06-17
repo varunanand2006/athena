@@ -47,29 +47,32 @@ question, err toward implementing and noting any assumptions made.
 - **Twilio** for SMS notifications
 
 ## Current phase
-Phase 19 — Gmail read-only lookup. DONE, gate passed. Athena gains a fourth
-on-demand **lookup source**: the user's Gmail inbox, **read-only**, exposed as
-the agent tool `search_email(query)`. It mirrors the existing lookup pattern
-(`load_document`/`lookup_leetcode`) — a queryable source the agent reaches for
-when asked ("did the recruiter reply?", "what did X say?", "find the email about
-Y"), NOT a source that auto-feeds memory. **Hard security boundary:** the OAuth
-scope is **`gmail.readonly` ONLY** — the minted credential is *physically
-incapable* of sending, drafting, deleting, modifying, or labeling; there is no
-such call anywhere in the code. A thin client (`agent/gmail_client.py`,
-official Google API client) authenticates from a stored long-lived refresh
-token (env: `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN`, from the `gmail-secret` k8s
-secret in the **athena** namespace — wired `optional: true` so the agent still
-starts before the secret exists). `search_email` returns a **lean** ≤10-message
-digest (sender/subject/date/truncated snippet — same context discipline as the
-other lookups, never dumps inboxes). The one-time refresh token is minted
-locally with `scripts/gmail_oauth.py` against an existing GCP project (project
-creation is quota-blocked; enabling an API in an existing project isn't).
-**NOT** exposed via the Rust MCP server (kept off the tunnel-facing surface).
-**Explicitly out of scope** (deliberate later phases): email → memory vault /
-reflection / `events` (auto-feed would pollute the curated vault — needs its own
-filtering-policy design), any non-readonly scope, send/draft/delete, and a
-background email poller. See [phase 19 doc](docs/phases/phase-19-gmail-readonly.md)
-and [ADR 011](docs/adr/011-gmail-readonly-lookup.md).
+Phase 19 + 20 — Gmail + Google Calendar read-only lookup. DONE, gates passed.
+Athena gains two on-demand **lookup sources**: the user's Gmail inbox
+(`search_email(query)`) and Google Calendar (`get_calendar_events(timeframe)`),
+both **read-only**. They mirror the existing lookup pattern
+(`load_document`/`lookup_leetcode`) — queryable sources the agent reaches for
+when asked, NOT sources that auto-feed memory. **Hard security boundary on
+both:** OAuth scopes are **`gmail.readonly`** and **`calendar.readonly`** ONLY —
+the minted credentials are *physically incapable* of sending, drafting, deleting,
+modifying, labeling, or creating/editing events; there are no such calls anywhere
+in the code. Thin clients (`agent/gmail_client.py`, `agent/calendar_client.py`,
+official Google API client) authenticate from stored long-lived refresh tokens
+(env: `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN` from `gmail-secret`; `GCAL_CLIENT_ID/SECRET/REFRESH_TOKEN`
+from `gcal-secret` — both k8s secrets in the **athena** namespace, wired
+`optional: true` so the agent starts before the secrets exist). `search_email`
+returns a lean ≤10-message digest (sender/subject/date/snippet);
+`get_calendar_events` returns a lean ≤10-event digest (title/start/end/location)
+for a natural-language timeframe ("today", "this week", "next 7 days", etc.).
+Refresh tokens are minted locally with `scripts/gmail_oauth.py` /
+`scripts/calendar_oauth.py` against an existing GCP project; the same Desktop
+app OAuth client can be reused for both (scopes are requested at flow time, not
+baked into the client). **NOT** exposed via the Rust MCP server (kept off the
+tunnel-facing surface). **Explicitly out of scope** (deliberate later phases):
+email/calendar → memory vault / reflection / `events` auto-feed, any
+non-readonly scope, send/draft/delete/create/edit, and background pollers. See
+[phase 19 doc](docs/phases/phase-19-gmail-readonly.md) and
+[ADR 011](docs/adr/011-gmail-readonly-lookup.md).
 
 ### Earlier: Phase 18 — Interlinked Memory (the wiki graph). DONE, gate passed. The memory
 vault becomes a Karpathy-style "LLM Wiki": notes cross-link with `[[wikilinks]]`,
