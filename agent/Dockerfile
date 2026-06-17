@@ -19,5 +19,6 @@ COPY main.py .
 COPY memory.py .
 COPY reflection.py .
 COPY gmail_client.py .
+COPY calendar_client.py .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

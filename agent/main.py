@@ -19,6 +19,7 @@ from langgraph.prebuilt import create_react_agent
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import gmail_client
+import calendar_client
 import memory as memory_vault
 import reflection
 
@@ -532,11 +533,74 @@ def search_email(query: str) -> str:
     return "\n".join(lines)
 
 
+# --- Read-only Google Calendar lookup (Phase 20) ---------------------------
+# Calendar is an on-demand lookup source — the agent reaches for it to answer
+# schedule questions. Same discipline as search_email: lean digest, read-only.
+
+
+@tool
+def get_calendar_events(timeframe: str) -> str:
+    """Look up the user's Google Calendar READ-ONLY and return a compact list of
+    events for the requested timeframe. Use this for questions like "what's on
+    my schedule today?", "do I have anything this week?", "when is my next
+    interview?", "am I free on Friday?". Accepts natural-language timeframes
+    such as "today", "tomorrow", "this week", "next 7 days", "next month".
+    This is READ-ONLY: you can view events but CANNOT create, edit, or delete
+    anything. Returns up to 10 events; answer from them."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+
+    tf = timeframe.lower().strip()
+    if tf in ("today",):
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif tf in ("tomorrow",):
+        start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif tf in ("this week", "next 7 days", "7 days"):
+        start = now
+        end = now + timedelta(days=7)
+    elif tf in ("next week",):
+        start = now + timedelta(days=7)
+        end = now + timedelta(days=14)
+    elif tf in ("this month", "next 30 days", "30 days"):
+        start = now
+        end = now + timedelta(days=30)
+    else:
+        # Default to next 7 days for anything unrecognized.
+        start = now
+        end = now + timedelta(days=7)
+
+    time_min = start.isoformat()
+    time_max = end.isoformat()
+
+    try:
+        events = calendar_client.list_events(time_min, time_max, max_results=10)
+    except calendar_client.CalendarNotConfigured as e:
+        return str(e)
+    except Exception as e:
+        return f"Calendar lookup failed: {e}"
+
+    if not events:
+        return f"No events found for '{timeframe}'."
+
+    lines = [f"{len(events)} event(s) for '{timeframe}':"]
+    for ev in events:
+        lines.append(f"- {ev['start']} → {ev['end']}: {ev['summary']}")
+        if ev["location"]:
+            lines.append(f"  Location: {ev['location']}")
+        if ev["description"]:
+            lines.append(f"  {ev['description']}")
+    return "\n".join(lines)
+
+
 SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
     "You have access to these tools: web_search, find_documents, load_document, "
     "lookup_leetcode, list_documents, get_table_of_contents, get_document_summary, "
-    "write_memory, list_memories, search_memory, upcoming, and search_email. "
+    "write_memory, list_memories, search_memory, upcoming, search_email, and "
+    "get_calendar_events. "
     "For content questions about the user's own documents — background, resume, skills, "
     "projects, notes — follow this two-step flow: (1) call find_documents(query) to "
     "identify the relevant document(s) by summary similarity, then (2) call "
@@ -580,6 +644,13 @@ SYSTEM_PROMPT = (
     "messages. Email access is READ-ONLY: you can search and read mail but you "
     "CANNOT send, draft, reply to, delete, or label email — never claim or offer "
     "to do any of those. "
+    "For questions about the user's CALENDAR — \"what's on my schedule?\", "
+    "\"am I free on <day>?\", \"do I have anything this week?\", \"when is my "
+    "next <event>?\" — you MUST call get_calendar_events with the appropriate "
+    "timeframe (e.g. \"today\", \"tomorrow\", \"this week\", \"next 7 days\") "
+    "and answer from the returned events. Calendar access is READ-ONLY: you can "
+    "view events but CANNOT create, edit, or delete anything — never claim or "
+    "offer to do any of those. "
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
@@ -751,6 +822,7 @@ async def chat(req: ChatRequest):
                 search_memory,
                 upcoming,
                 search_email,
+                get_calendar_events,
             ],
             prompt=prompt,
         )

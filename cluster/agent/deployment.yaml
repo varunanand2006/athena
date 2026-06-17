@@ -24,7 +24,7 @@ spec:
             claimName: agent-memory
       containers:
         - name: agent
-          image: athena-agent:phase19
+          image: athena-agent:phase20
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -67,6 +67,28 @@ spec:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_DB
+            # Read-only Google Calendar lookup (Phase 20). calendar.readonly scope
+            # only — the credential cannot create/edit/delete events. See
+            # cluster/agent/gcal-secret.example.yaml. Marked optional so the
+            # agent still starts before the secret is applied.
+            - name: GCAL_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gcal-secret
+                  key: GCAL_CLIENT_ID
+                  optional: true
+            - name: GCAL_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gcal-secret
+                  key: GCAL_CLIENT_SECRET
+                  optional: true
+            - name: GCAL_REFRESH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gcal-secret
+                  key: GCAL_REFRESH_TOKEN
+                  optional: true
             # Read-only Gmail lookup (Phase 19). gmail.readonly scope only —
             # the credential cannot send/delete/modify mail. See
             # cluster/agent/gmail-secret.example.yaml. Marked optional so the
