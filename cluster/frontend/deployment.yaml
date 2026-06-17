@@ -18,7 +18,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: frontend
-          image: athena-frontend:phase17
+          image: athena-frontend:phase18
           imagePullPolicy: Never
           ports:
             - containerPort: 80

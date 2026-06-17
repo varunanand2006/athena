@@ -21,8 +21,35 @@ interface NoteMeta {
   source: string
 }
 
+interface LinkRef {
+  slug: string
+  target?: string
+  title?: string
+  exists?: boolean
+}
+
 interface Note extends NoteMeta {
   body: string
+  links?: LinkRef[]
+  backlinks?: LinkRef[]
+}
+
+// Match the agent's Python slugify() so [[wikilink]] targets resolve to the
+// same note identity the backend uses.
+function slugify(s: string): string {
+  const slug = s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug || 'untitled'
+}
+
+// Rewrite [[Target]] / [[Target|Display]] into markdown links with a note:
+// scheme, intercepted by the custom <a> renderer below (Phase 18 graph).
+function linkifyWikilinks(body: string): string {
+  return body.replace(/\[\[([^\]]+)\]\]/g, (_m, inner: string) => {
+    const [target, display] = inner.split('|')
+    const slug = slugify(target.trim())
+    const text = (display ?? target).trim()
+    return `[${text}](note:${slug})`
+  })
 }
 
 // A small dated chip for a note event (Phase 17 temporal frontmatter).
@@ -271,8 +298,55 @@ export default function MemoryView() {
                 </span>
               </div>
               <div className="prose prose-sm max-w-none" style={{ color: 'var(--text)' }}>
-                <ReactMarkdown>{selected.body}</ReactMarkdown>
+                <ReactMarkdown
+                  components={{
+                    a: ({ href, children }) => {
+                      if (href?.startsWith('note:')) {
+                        const slug = href.slice(5)
+                        const known = (selected.links ?? []).find((l) => l.slug === slug)
+                        const exists = known?.exists !== false
+                        return (
+                          <a
+                            href="#"
+                            onClick={(e) => { e.preventDefault(); openNote(slug) }}
+                            style={{
+                              color: exists ? 'var(--accent)' : 'var(--text-muted)',
+                              textDecoration: exists ? 'none' : 'underline dashed',
+                              cursor: 'pointer',
+                            }}
+                            title={exists ? `Open "${slug}"` : `"${slug}" not written yet`}
+                          >
+                            {children}
+                          </a>
+                        )
+                      }
+                      return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+                    },
+                  }}
+                >
+                  {linkifyWikilinks(selected.body)}
+                </ReactMarkdown>
               </div>
+
+              {(selected.backlinks?.length ?? 0) > 0 && (
+                <div className="mt-6 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+                  <p className="text-xs uppercase tracking-wider font-medium mb-2" style={{ color: 'var(--text-muted)' }}>
+                    Linked from
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {selected.backlinks!.map((b) => (
+                      <button
+                        key={b.slug}
+                        onClick={() => openNote(b.slug)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors hover:opacity-80"
+                        style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}
+                      >
+                        ← {b.title ?? b.slug}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

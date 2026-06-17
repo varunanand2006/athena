@@ -898,12 +898,65 @@ def memory_index():
     return memory_vault.list_notes()
 
 
+@app.get("/memory/graph")
+def memory_graph():
+    """Node-link view of the memory wiki for the frontend graph (Phase 18).
+
+    Nodes are notes (slug/title/source/tags + undirected `degree`); edges are
+    resolved `[[wikilinks]]` between two EXISTING notes (links to not-yet-written
+    notes are dropped so the graph has no dangling endpoints). Computed from the
+    same `extract_links` scan the backlinks use. NOTE: this route is declared
+    before `/memory/{slug}` so 'graph' isn't captured as a note slug."""
+    notes = memory_vault.list_notes()
+    by_slug = {n["slug"]: n for n in notes}
+
+    edges = []
+    seen_edges = set()
+    degree = {n["slug"]: 0 for n in notes}
+    for n in notes:
+        full = memory_vault.read_note(n["slug"])
+        if full is None:
+            continue
+        for link in memory_vault.extract_links(full["body"]):
+            tgt = link["slug"]
+            if tgt == n["slug"] or tgt not in by_slug:
+                continue
+            key = tuple(sorted((n["slug"], tgt)))  # undirected dedup
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+            edges.append({"source": n["slug"], "target": tgt})
+            degree[n["slug"]] += 1
+            degree[tgt] += 1
+
+    nodes = [
+        {
+            "slug": n["slug"],
+            "title": n["title"],
+            "source": n["source"],
+            "tags": n["tags"],
+            "degree": degree[n["slug"]],
+        }
+        for n in notes
+    ]
+    return {"nodes": nodes, "edges": edges}
+
+
 @app.get("/memory/{slug}")
 def memory_note(slug: str):
-    """Full content of one memory note (frontmatter fields + markdown body)."""
+    """Full content of one memory note (frontmatter fields + markdown body),
+    plus the note's graph edges (Phase 18): `links` (outgoing [[wikilinks]] in
+    the body, with whether each target note exists yet) and `backlinks` (notes
+    that link to this one)."""
     note = memory_vault.read_note(slug)
     if note is None:
         raise HTTPException(status_code=404, detail=f"No memory note '{slug}'.")
+    existing_slugs = {n["slug"] for n in memory_vault.list_notes()}
+    note["links"] = [
+        {**link, "exists": link["slug"] in existing_slugs}
+        for link in memory_vault.extract_links(note["body"])
+    ]
+    note["backlinks"] = memory_vault.backlinks(slug)
     return note
 
 

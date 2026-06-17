@@ -57,7 +57,7 @@ matching, no embeddings.
 
 import os
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 
 MEMORY_DIR = os.getenv("MEMORY_DIR", "/data/memory")
 
@@ -265,6 +265,7 @@ def list_notes() -> list[dict]:
 def write_note(
     title: str, content: str, tags: list[str] | None = None,
     source: str = "explicit", events: list[dict] | None = None,
+    replace: bool = False,
 ) -> dict:
     """Create or UPDATE a note. If a note with the same slug exists, append
     the new content to its body and bump `updated` (and union the tags and
@@ -280,6 +281,15 @@ def write_note(
     `events` (Phase 17) is an optional list of {date, kind} maps extracted from
     the note's prose. Merged across same-slug updates the same way tags are, so
     a re-reflection adds new deadlines without dropping or duplicating old ones.
+
+    `replace` (Phase 18) controls update semantics on an existing note:
+      * False (default) — APPEND `content` as a dated addition (Phase 15
+        behavior; preserves the audit trail for user-fact notes).
+      * True — RECONCILE: replace the body entirely with `content`. Used for
+        wiki concept/entity pages, where synthesis hands back a clean rewritten
+        page rather than an ever-growing append log. `created`/`source` are
+        still preserved; tags/events still merge. The `_log.md` op log
+        (append_log) is the audit trail that makes destructive rewrites safe.
     """
     os.makedirs(MEMORY_DIR, exist_ok=True)
     tags = tags or []
@@ -290,7 +300,7 @@ def write_note(
 
     existing = read_note(slug)
     if existing is not None:
-        action = "updated"
+        action = "reconciled" if replace else "updated"
         created = existing["created"] or today
         # union tags, preserving existing order then new ones
         merged_tags = list(existing["tags"])
@@ -298,12 +308,16 @@ def write_note(
             if t not in merged_tags:
                 merged_tags.append(t)
         merged_events = _merge_events(existing["events"], events)
-        # append the new content as a dated addition to the existing body
-        body = existing["body"].rstrip()
-        if body:
-            body = f"{body}\n\n*(updated {today})*\n{content.strip()}"
-        else:
+        if replace:
+            # Reconcile: clean rewrite of the page body.
             body = content.strip()
+        else:
+            # append the new content as a dated addition to the existing body
+            body = existing["body"].rstrip()
+            if body:
+                body = f"{body}\n\n*(updated {today})*\n{content.strip()}"
+            else:
+                body = content.strip()
         title = existing["title"] or title
         note_source = existing["source"] or "explicit"  # preserve origin
         text = _render_note(title, created, today, merged_tags, body, note_source, merged_events)
@@ -504,3 +518,92 @@ def collect_events() -> tuple[list[dict], int, bool]:
                 "slug": meta["slug"],
             })
     return out, len(notes), over_cap
+
+
+# --- Interlinked wiki: the graph (Phase 18) --------------------------------
+# The graph is DERIVED from prose: `[[wikilinks]]` live in note bodies (where
+# synthesis authors them and Obsidian renders them), and the edges are computed
+# by scanning, never stored in a second place that could drift. Same philosophy
+# as `events` — one source of truth, rebuildable by re-scanning. Link identity
+# is the slug (slugify of the link target), matching the note-identity rule, so
+# `[[Meta interview prep]]` resolves to `meta-interview-prep.md`.
+
+# `[[Target]]` or `[[Target|Display alias]]` (Obsidian syntax). We capture the
+# target (before any `|`); display text is the frontend's concern.
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def extract_links(body: str) -> list[dict]:
+    """Outgoing links from a note body. Returns deduped [{slug, target}] where
+    `target` is the raw link text and `slug` is its resolved note identity."""
+    seen = {}
+    for raw in _WIKILINK_RE.findall(body or ""):
+        target = raw.split("|", 1)[0].strip()
+        if not target:
+            continue
+        slug = slugify(target)
+        if slug not in seen:
+            seen[slug] = {"slug": slug, "target": target}
+    return list(seen.values())
+
+
+def backlinks(slug: str) -> list[dict]:
+    """Incoming links: notes whose body links to `slug`. Full-vault scan
+    (deliberately the same pattern as the Phase 16 load / Phase 17 events scan);
+    the graph is small enough that scanning is fine, and there's no index to
+    keep in sync."""
+    out = []
+    for meta in list_notes():
+        if meta["slug"] == slug:
+            continue
+        note = read_note(meta["slug"])
+        if note is None:
+            continue
+        if any(l["slug"] == slug for l in extract_links(note["body"])):
+            out.append({"slug": note["slug"], "title": note["title"]})
+    return out
+
+
+# --- Wiki artifacts: index + op log (Phase 18) -----------------------------
+# `_`-prefixed so list_notes() skips them (same convention as the documents'
+# `_TABLE_OF_CONTENTS.md`). Generated/derived — never hand-authored memory.
+
+_INDEX_FILE = "_index.md"
+_LOG_FILE = "_log.md"
+
+
+def write_index() -> None:
+    """Regenerate `_index.md` — the wiki catalog (Karpathy's index.md). Lists
+    every note newest-first with tags and event/link counts. Derived, so it's
+    safe to overwrite wholesale (atomic write, like the documents TOC)."""
+    notes = list_notes()
+    lines = ["# Memory Wiki Index", "", f"_{len(notes)} notes._", ""]
+    for n in notes:
+        tag_str = f" [{', '.join(n['tags'])}]" if n["tags"] else ""
+        ev = f" · {len(n['events'])} event(s)" if n["events"] else ""
+        lines.append(f"- [[{n['title']}]]{tag_str} (updated {n['updated']}){ev}")
+    text = "\n".join(lines) + "\n"
+
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+    path = os.path.join(MEMORY_DIR, _INDEX_FILE)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def append_log(entry: str) -> None:
+    """Append one timestamped line to `_log.md` — the operation log (Karpathy's
+    log.md). This is the audit trail that makes reconciling (destructive
+    body-rewrite) safe: every synthesis op is recorded even though the page
+    itself was overwritten."""
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+    path = os.path.join(MEMORY_DIR, _LOG_FILE)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    line = f"- {stamp}  {entry}\n"
+    # Create with a header the first time so the file reads cleanly in Obsidian.
+    if not os.path.isfile(path):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Memory Wiki Log\n\n")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)

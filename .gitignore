@@ -22,6 +22,9 @@ kubeconfig
 *-secret.yaml
 secret.yaml
 
+# Generated seed vault (reproducible via scripts/seed_memory.py)
+scripts/seed-vault/
+
 # OS
 .DS_Store
 Thumbs.db

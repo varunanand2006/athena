@@ -109,6 +109,13 @@ DO NOT capture:
 
 Before writing, check the vault index. If a relevant note exists, UPDATE it (same title) rather than creating a near-duplicate.
 
+LINKS & CONCEPT PAGES (build the wiki graph):
+This vault is an interlinked wiki, not a pile of isolated notes. When you capture a memory:
+- CROSS-LINK related notes using Obsidian wikilink syntax: write [[Exact Note Title]] inline in the content wherever you mention another topic, concept, person, or project that has (or should have) its own note. Use the EXACT title of the target note so the link resolves.
+- Create CONCEPT/ENTITY pages: if a durable concept, technology, company, or person is central (e.g. "Distributed systems", "Meta", "LangGraph"), emit a separate decision for it with a short page describing it, and link it from the notes that mention it.
+- For a concept/entity page that already exists, RECONCILE it: set "concept": true and put the FULL up-to-date page content in "content" (it REPLACES the page, so include what should remain). For ordinary personal-fact notes leave "concept" false/absent (the content is APPENDED).
+- Only link/create pages for things that genuinely recur or matter long-term — do not over-link trivia. Conservative capture still applies.
+
 DATES (events):
 If a memory concerns something TIME-BOUND — an interview, a deadline, an application due date, a scheduled event — also record the date(s) in an "events" list. Each event is {{"date": "YYYY-MM-DD", "kind": "<short label like interview|deadline|application>"}}.
 - Capture ONLY concrete, resolved calendar dates. Resolve relative dates against TODAY ({today}): e.g. if today is {today} and the user says "next Friday", work out the actual YYYY-MM-DD.
@@ -117,10 +124,13 @@ If a memory concerns something TIME-BOUND — an interview, a deadline, an appli
 
 OUTPUT FORMAT:
 Return ONLY a JSON array of decisions (or an empty array if nothing to capture). Each item has:
-{{"title": "short topic name", "content": "what to remember", "tags": ["tag1", "tag2"], "events": [{{"date": "YYYY-MM-DD", "kind": "interview"}}], "is_update": true/false}}
+{{"title": "short topic name", "content": "what to remember, with [[wikilinks]] to related notes", "tags": ["tag1", "tag2"], "events": [{{"date": "YYYY-MM-DD", "kind": "interview"}}], "concept": true/false, "is_update": true/false}}
 
 Example (today is {today}):
-[{{"title": "Stripe interview prep", "content": "Interview scheduled for next Friday. Focus areas: system design, API design.", "tags": ["interview", "stripe"], "events": [{{"date": "2026-06-19", "kind": "interview"}}], "is_update": false}}]
+[
+  {{"title": "Stripe interview prep", "content": "Interview scheduled for next Friday. Prepping [[System design]] and [[API design]]. Role is at [[Stripe]].", "tags": ["interview", "stripe"], "events": [{{"date": "2026-06-19", "kind": "interview"}}], "concept": false, "is_update": false}},
+  {{"title": "Stripe", "content": "Payments company. Varun is interviewing here — see [[Stripe interview prep]].", "tags": ["company"], "events": [], "concept": true, "is_update": false}}
+]
 
 Return ONLY the JSON array, no other text."""
 
@@ -232,21 +242,42 @@ def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
 
         # Write memories
         import memory as memory_vault
+        wrote_any = False
         for decision in decisions:
             title = decision.get("title", "")
             content = decision.get("content", "")
             tags = decision.get("tags", [])
             events = _sanitize_events(decision.get("events", []))
+            # Concept/entity pages are RECONCILED (clean rewrite); ordinary
+            # personal-fact notes are APPENDED (Phase 15 behavior). Phase 18.
+            is_concept = bool(decision.get("concept", False))
             if not title or not content:
                 continue
             try:
-                result = memory_vault.write_note(title, content, tags, source="auto", events=events)
+                result = memory_vault.write_note(
+                    title, content, tags, source="auto", events=events,
+                    replace=is_concept,
+                )
+                wrote_any = True
                 logger.info(
-                    f"  {'Updated' if result['action'] == 'updated' else 'Created'} "
-                    f"note '{result['title']}' ({result['slug']}.md) [source={result['source']}]"
+                    f"  {result['action'].capitalize()} note '{result['title']}' "
+                    f"({result['slug']}.md) [source={result['source']}"
+                    f"{', concept' if is_concept else ''}]"
+                )
+                # Op log is the audit trail that makes reconcile (rewrite) safe.
+                memory_vault.append_log(
+                    f"{result['action']} {'concept ' if is_concept else ''}"
+                    f"note [[{result['title']}]] from conversation {conversation_id}"
                 )
             except Exception as e:
                 logger.error(f"Failed to write memory '{title}': {e}")
+
+        # Regenerate the wiki catalog once, after all writes for this pass.
+        if wrote_any:
+            try:
+                memory_vault.write_index()
+            except Exception as e:
+                logger.error(f"Failed to regenerate memory index: {e}")
 
         # Mark conversation as reflected
         conn = _pg_conn()
