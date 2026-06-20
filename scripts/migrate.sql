@@ -142,3 +142,17 @@ ALTER TABLE documents
 ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS reflected_at TIMESTAMPTZ DEFAULT NULL;
 
+-- Phase 21: External memory feeds — labeled-email ingestion ledger.
+-- Tracks which Gmail message IDs the background email sweep has already
+-- considered, so a labeled email is captured at most once and never
+-- re-evaluated on subsequent sweeps. Message IDs are structured data (not
+-- memory), so they live here rather than in the vault. The calendar sweep
+-- instead uses a self-contained `_calendar_sweep.md` watermark in the vault.
+-- The agent also creates this table defensively (CREATE TABLE IF NOT EXISTS) so
+-- a missed migration can't silently break the sweep.
+CREATE TABLE IF NOT EXISTS email_processed (
+    message_id   TEXT        PRIMARY KEY,
+    label        TEXT,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+

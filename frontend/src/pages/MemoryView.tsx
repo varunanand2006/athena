@@ -19,6 +19,7 @@ interface NoteMeta {
   created: string
   updated: string
   source: string
+  origin?: string
 }
 
 interface LinkRef {
@@ -81,6 +82,37 @@ function SourceBadge({ source }: { source: string }) {
       title={isAuto ? 'Captured automatically by Athena' : 'You asked Athena to remember this'}
     >
       {isAuto ? 'auto' : 'you'}
+    </span>
+  )
+}
+
+// Chip showing a note's provenance (Phase 21): whether it was captured from a
+// conversation, the user's calendar, or a labeled email. Lets the user audit —
+// and delete — notes the background source sweeps wrote into the vault.
+function OriginChip({ origin }: { origin?: string }) {
+  const o = origin || 'conversation'
+  const meta: Record<string, { label: string; bg: string; color: string; title: string }> = {
+    calendar: {
+      label: 'from calendar', bg: 'rgba(139, 92, 246, 0.15)', color: '#6d28d9',
+      title: 'Captured automatically from your Google Calendar',
+    },
+    email: {
+      label: 'from email', bg: 'rgba(236, 72, 153, 0.13)', color: '#be185d',
+      title: 'Captured automatically from a labeled email',
+    },
+    conversation: {
+      label: 'from conversation', bg: 'rgba(100, 116, 139, 0.12)', color: '#475569',
+      title: 'Captured from a chat conversation',
+    },
+  }
+  const m = meta[o] ?? meta.conversation
+  return (
+    <span
+      className="inline-block px-1.5 py-0.5 rounded text-xs font-medium shrink-0"
+      style={{ background: m.bg, color: m.color }}
+      title={m.title}
+    >
+      {m.label}
     </span>
   )
 }
@@ -224,6 +256,7 @@ export default function MemoryView() {
                     {n.title}
                   </span>
                   <SourceBadge source={n.source} />
+                  <OriginChip origin={n.origin} />
                 </div>
                 {n.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1">
@@ -270,6 +303,7 @@ export default function MemoryView() {
                     {selected.title}
                   </h2>
                   <SourceBadge source={selected.source} />
+                  <OriginChip origin={selected.origin} />
                 </div>
                 <button
                   onClick={() => deleteNote(selected.slug)}

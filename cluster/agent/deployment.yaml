@@ -24,7 +24,7 @@ spec:
             claimName: agent-memory
       containers:
         - name: agent
-          image: athena-agent:streaming
+          image: athena-agent:phase21
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -45,6 +45,11 @@ spec:
               value: "nomic-embed-text"
             - name: OLLAMA_MODEL
               value: "gemma4:e2b"
+            # Phase 21: the background email sweep ONLY ingests emails carrying
+            # this Gmail label (the full inbox is never swept). Change the label
+            # here without a rebuild; defaults to "athena" in code if unset.
+            - name: ATHENA_EMAIL_LABEL
+              value: "athena"
             - name: POSTGRES_HOST
               value: "postgres.athena.svc.cluster.local"
             - name: OPENAI_API_KEY

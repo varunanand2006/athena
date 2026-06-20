@@ -386,20 +386,72 @@ def get_document_summary(name: str) -> str:
 # embeddings this phase.
 
 
+def _format_events_str(events: list[dict]) -> str:
+    """Render a note's events for a tool's confirmation string (not the vault)."""
+    if not events:
+        return ""
+    parts = [f"{e['date']}({e['kind']})" if e.get("kind") else e["date"] for e in events]
+    return " events=[" + ", ".join(parts) + "]"
+
+
 @tool
-def write_memory(title: str, content: str, tags: list[str] | None = None) -> str:
-    """Save a memory note to the persistent memory vault. Call this ONLY when
+def write_memory(
+    title: str, content: str, tags: list[str] | None = None,
+    events: list[dict] | None = None,
+) -> str:
+    """Save a NEW memory note to the persistent memory vault. Call this ONLY when
     the user explicitly asks you to remember/note/save something. `title` is a
     short topic name (used as the note's identity), `content` is what to
-    remember, `tags` is an optional list of short keywords. If a note on the
-    same topic (same slugified title) already exists, this UPDATES it in place
-    instead of creating a duplicate."""
-    result = memory_vault.write_note(title, content, tags or [], source="explicit")
+    remember, `tags` is an optional list of short keywords. If the memory is
+    TIME-BOUND (an interview, deadline, or application date), also pass `events`
+    as a list of {"date": "YYYY-MM-DD", "kind": "<short label>"} maps, resolving
+    any relative date ("Monday", "next Friday") against today's date given at the
+    top of this prompt. If a note on the same topic (same slugified title)
+    already exists, this APPENDS to it and merges its events. To CORRECT or
+    reschedule something already remembered, use update_memory instead (it
+    replaces rather than appends)."""
+    clean_events = memory_vault.sanitize_events(events or [])
+    result = memory_vault.write_note(
+        title, content, tags or [], source="explicit", events=clean_events,
+    )
     verb = "Updated existing" if result["action"] == "updated" else "Created"
     tag_str = f" tags={result['tags']}" if result["tags"] else ""
     return (
         f"{verb} memory note '{result['title']}' "
-        f"({result['slug']}.md){tag_str}, updated {result['updated']}."
+        f"({result['slug']}.md){tag_str}{_format_events_str(result['events'])}, "
+        f"updated {result['updated']}."
+    )
+
+
+@tool
+def update_memory(
+    title: str, content: str, tags: list[str] | None = None,
+    events: list[dict] | None = None,
+) -> str:
+    """CORRECT an EXISTING memory note when the user explicitly says something
+    has CHANGED. Call this ONLY on explicit correction language — "update…",
+    "change…", "correct…", "actually it's…", "it moved to…", "reschedule…",
+    "it's no longer…" — applied to something already in memory. Unlike
+    write_memory (which appends), this REPLACES the note's body with `content`
+    and, when `events` is given, REPLACES its dated events — so a rescheduled
+    interview shows ONLY the new date, not the old one alongside it, and the body
+    reflects the correction instead of a contradiction. Use the SAME title as the
+    note being corrected so it updates in place. `events` is an optional list of
+    {"date": "YYYY-MM-DD", "kind": "<short label>"} maps — pass the corrected
+    date(s), resolving relatives against today's date given at the top of this
+    prompt. Do NOT use this to add brand-new information that doesn't contradict
+    an existing note."""
+    clean_events = memory_vault.sanitize_events(events or [])
+    result = memory_vault.write_note(
+        title, content, tags or [], source="explicit", events=clean_events,
+        replace=True, replace_events=True,
+    )
+    verb = "Corrected" if result["action"] in ("reconciled", "updated") else "Created"
+    tag_str = f" tags={result['tags']}" if result["tags"] else ""
+    return (
+        f"{verb} memory note '{result['title']}' "
+        f"({result['slug']}.md){tag_str}{_format_events_str(result['events'])}, "
+        f"updated {result['updated']}."
     )
 
 
@@ -600,8 +652,8 @@ SYSTEM_PROMPT = (
     "You are Athena, a personal AI assistant. "
     "You have access to these tools: web_search, find_documents, load_document, "
     "lookup_leetcode, list_documents, get_table_of_contents, get_document_summary, "
-    "write_memory, list_memories, search_memory, upcoming, search_email, and "
-    "get_calendar_events. "
+    "write_memory, update_memory, list_memories, search_memory, upcoming, "
+    "search_email, and get_calendar_events. "
     "For content questions about the user's own documents — background, resume, skills, "
     "projects, notes — follow this two-step flow: (1) call find_documents(query) to "
     "identify the relevant document(s) by summary similarity, then (2) call "
@@ -629,6 +681,18 @@ SYSTEM_PROMPT = (
     "remember that\". Just respond conversationally. Athena captures durable "
     "facts automatically in the background; foreground saving is NOT your job "
     "and doing it on your own initiative is a mistake. "
+    "MEMORY CORRECTIONS — separate from the rule above. When the user EXPLICITLY "
+    "tells you that something ALREADY in memory has CHANGED — using correction "
+    "language like \"update…\", \"change…\", \"correct…\", \"actually it's…\", "
+    "\"my Stripe interview moved to Thursday\", \"reschedule…\", or \"it's no "
+    "longer…\" — you MUST call update_memory with the SAME title as the existing "
+    "note and the corrected content (and corrected events/dates if the change is "
+    "a date). update_memory REPLACES the note's body and dated events, so the "
+    "correction stands alone and no stale, contradictory date is left behind. "
+    "Use update_memory ONLY to correct something already remembered; for "
+    "genuinely NEW information that does not contradict an existing note, do "
+    "nothing (background capture handles it) and never use update_memory to add "
+    "new facts. "
     "When a question might be answered by something stored in memory (e.g. "
     "\"what am I prepping for?\", \"what did I apply to?\") and it is NOT already "
     "covered by the loaded memory block at the top of this prompt, call "
@@ -705,15 +769,20 @@ def _build_chat_system_prompt() -> str:
             ctx["tokens"], ctx["note_count"], ctx["max_tokens"],
         )
 
+    # Today's date is needed so the model can resolve relative dates ("Monday",
+    # "next Friday") when writing/correcting memory events (write_memory /
+    # update_memory). The bare SYSTEM_PROMPT is date-free; the chat path stamps it.
+    today_line = f"Today's date is {date.today().isoformat()}.\n\n"
+
     if not ctx["block"]:
-        return SYSTEM_PROMPT  # empty vault — nothing to inject
+        return today_line + SYSTEM_PROMPT  # empty vault — nothing to inject
 
     data_section = (
         "--- KNOWN MEMORIES ABOUT THE USER (standing context, loaded each turn) ---\n"
         f"{ctx['block']}\n"
         "--- END KNOWN MEMORIES ---"
     )
-    return f"{data_section}\n\n{RECALL_POLICY}\n\n{SYSTEM_PROMPT}"
+    return f"{today_line}{data_section}\n\n{RECALL_POLICY}\n\n{SYSTEM_PROMPT}"
 
 
 class ChatRequest(BaseModel):
@@ -725,6 +794,21 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     conversation_id: str
+
+
+def _run_external_feeds():
+    """Sweep the external sources (calendar + labeled email) into memory (Phase
+    21). Each is isolated so one source's failure (or a missing credential)
+    never affects the other or the conversation reflection that runs alongside.
+    Both degrade silently when their Google secret isn't mounted."""
+    try:
+        reflection.reflect_on_calendar()
+    except Exception as e:
+        logger.error(f"Calendar sweep failed: {e}")
+    try:
+        reflection.reflect_on_labeled_email()
+    except Exception as e:
+        logger.error(f"Email sweep failed: {e}")
 
 
 def _trigger_reflection_sweep(exclude_conversation_id: str):
@@ -743,6 +827,9 @@ def _trigger_reflection_sweep(exclude_conversation_id: str):
                 logger.error(f"Reflection failed for {conv['id']}: {e}")
     except Exception as e:
         logger.error(f"Reflection sweep failed: {e}")
+
+    # Phase 21: sweep external sources at the same new-conversation boundary.
+    _run_external_feeds()
 
 
 def _straggler_reflection_sweep():
@@ -773,6 +860,12 @@ def _straggler_reflection_sweep():
             logger.info(f"Straggler sweep: reflected {straggler_count} conversations")
     except Exception as e:
         logger.error(f"Straggler sweep failed: {e}")
+
+    # Phase 21: the external-source sweeps also run on the 30-min straggler job,
+    # so calendar/email are picked up even if no new conversation started (and to
+    # recover from a pod restart between boundary triggers). The calendar sweep's
+    # own watermark keeps this from re-running the LLM more than every few hours.
+    _run_external_feeds()
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -819,6 +912,7 @@ async def chat(req: ChatRequest):
                 get_table_of_contents,
                 get_document_summary,
                 write_memory,
+                update_memory,
                 list_memories,
                 search_memory,
                 upcoming,

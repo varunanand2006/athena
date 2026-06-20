@@ -44,17 +44,17 @@ If you're unsure whether something is a planning question or an implementation q
 - **Twilio** for SMS notifications (planned)
 
 ## Current phase
-**Phase 20 (complete)** — Gmail + Google Calendar read-only lookup.
+**Phase 21 (complete)** — Safe in-chat memory correction + automatic external source feeds.
 
-Both are on-demand lookup sources (like `load_document` / `lookup_leetcode`) — the agent calls them when asked, they do NOT auto-feed memory.
+Two extensions to *how memory gets written* (vault format unchanged except a new `origin` field):
 
-- `search_email(query)` → `agent/gmail_client.py` → `gmail-secret` k8s secret
-- `get_calendar_events(timeframe)` → `agent/calendar_client.py` → `gcal-secret` k8s secret
-- OAuth scopes: `gmail.readonly` + `calendar.readonly` **only** — credentials are physically incapable of writes
-- Both secrets are `optional: true` so the agent starts before they exist
-- Neither is exposed via the Rust MCP server (kept off the tunnel-facing surface)
+- **Foreground correction** — `update_memory(title, content, tags, events)` tool (`agent/main.py`) REPLACES an existing note's body and dated events instead of appending. Fires ONLY on explicit correction language ("update", "change", "correct", "actually it's", "moved to", "reschedule", "no longer") — prompt-enforced, **re-verify on any foreground-model swap** (same discipline as the explicit-only `write_memory` rule). `write_memory` also now accepts `events`; the chat prompt carries today's date for relative-date resolution. Backed by `memory.write_note(replace=True, replace_events=True)`. **Foreground-only** — background reflection NEVER gets `replace_events`.
+- **Calendar feed** — `reflection.reflect_on_calendar()` sweeps the next 14 days of Google Calendar (fully automatic — calendar is curated by definition) and writes durable events as notes with `source: auto`, `origin: calendar`. Throttled by a `_calendar_sweep.md` vault watermark.
+- **Email feed** — `reflection.reflect_on_labeled_email()` ingests ONLY emails carrying the Gmail label `athena` (env `ATHENA_EMAIL_LABEL`); writes `source: auto`, `origin: email`. **The full inbox is NEVER swept** — the label is mandatory. Processed message IDs tracked in the Postgres `email_processed` table.
+- Both sweeps run at the new-conversation boundary AND the 30-min straggler job (`_run_external_feeds()`), are **append-only** (no destructive background rewrites), and **degrade silently** if `gcal-secret`/`gmail-secret` aren't mounted.
+- **`origin` frontmatter** — `conversation` (default, backward-compatible) | `calendar` | `email`; preserved across updates like `source`; surfaced as a "from …" chip in `/memory`.
 
-See `docs/phases/phase-19-gmail-readonly.md`, `docs/adr/011-gmail-readonly-lookup.md`, and `docs/phases/` for all prior phase write-ups.
+See `docs/phases/phase-21-memory-feeds.md`, `docs/adr/012-external-memory-feeds.md`, and `docs/phases/` for all prior phase write-ups.
 
 ### Phase history (brief)
 | Phase | Summary |
@@ -68,6 +68,7 @@ See `docs/phases/phase-19-gmail-readonly.md`, `docs/adr/011-gmail-readonly-looku
 | 17    | Temporal frontmatter (`events:` list on dated notes) |
 | 18    | Interlinked memory / wiki graph (`[[wikilinks]]`, concept pages) |
 | 19–20 | Gmail + Google Calendar read-only lookup |
+| 21    | Safe foreground memory correction (`update_memory`) + automatic calendar/labeled-email feeds (`origin` provenance) |
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`

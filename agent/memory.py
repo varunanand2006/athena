@@ -15,6 +15,7 @@ by a free-text body:
     created: 2026-06-15
     updated: 2026-06-15
     source: explicit
+    origin: conversation
     tags: [interview, meta]
     events: [{date: 2026-06-19, kind: interview}]
     ---
@@ -28,6 +29,14 @@ Rules:
   * `source`  — "explicit" (user said "remember…") or "auto" (Phase 15
                 autonomous reflection). Records how the note ORIGINATED;
                 preserved across updates. Missing source -> "explicit".
+  * `origin`  — (Phase 21) WHERE the note came from: "conversation" (chat
+                reflection or an explicit chat write), "calendar" (the
+                background calendar sweep), or "email" (the background labeled-
+                email sweep). Makes the vault auditable — the /memory view shows
+                a "from calendar / from email / from conversation" chip so the
+                user can spot and delete a feed-captured note. Like `source` it
+                is a property of the FIRST write and preserved across updates.
+                Missing origin -> "conversation" (backward compatible).
   * `tags`    — a YAML list; may be empty (`tags: []`).
   * `events`  — (Phase 17) an OPTIONAL YAML list of {date, kind} maps, the
                 only structured/queryable field we extract from a note's prose
@@ -157,6 +166,31 @@ def _merge_events(existing: list[dict], new: list[dict]) -> list[dict]:
     return merged
 
 
+def sanitize_events(raw) -> list[dict]:
+    """Validate a list of {date, kind} event maps: keep only items with a real
+    ISO (YYYY-MM-DD) date, coercing `kind` to a short string. Malformed or
+    unresolvable dates are dropped (the note still exists as prose) rather than
+    written as a broken event — getting a date wrong must stay cheap.
+
+    Single source of truth for event hygiene, shared by the foreground
+    correction tool (update_memory, Phase 21) and the background sweeps so
+    validation is identical no matter who emits the events."""
+    if not isinstance(raw, list):
+        return []
+    clean = []
+    for ev in raw:
+        if not isinstance(ev, dict):
+            continue
+        d = str(ev.get("date", "")).strip()
+        try:
+            date.fromisoformat(d)
+        except ValueError:
+            continue
+        kind = str(ev.get("kind", "")).strip()[:40]
+        clean.append({"date": d, "kind": kind})
+    return clean
+
+
 def parse_note(text: str) -> tuple[dict, str]:
     """Split a note's raw text into (frontmatter dict, body).
 
@@ -165,9 +199,12 @@ def parse_note(text: str) -> tuple[dict, str]:
     """
     # `source` defaults to "explicit": any note written before Phase 15 (or
     # with no source line) was, by definition, an explicit user-driven write.
+    # `origin` defaults to "conversation": every note written before Phase 21
+    # (no origin line) came from conversation reflection or an explicit chat
+    # write, so that's the backward-compatible default.
     meta: dict = {
         "title": "", "created": "", "updated": "", "source": "explicit",
-        "tags": [], "events": [],
+        "origin": "conversation", "tags": [], "events": [],
     }
     if not text.startswith("---"):
         return meta, text.strip()
@@ -202,6 +239,7 @@ def parse_note(text: str) -> tuple[dict, str]:
 def _render_note(
     title: str, created: str, updated: str, tags: list[str], body: str,
     source: str = "explicit", events: list[dict] | None = None,
+    origin: str = "conversation",
 ) -> str:
     return (
         "---\n"
@@ -209,6 +247,7 @@ def _render_note(
         f"created: {created}\n"
         f"updated: {updated}\n"
         f"source: {source}\n"
+        f"origin: {origin}\n"
         f"tags: {_format_tags(tags)}\n"
         f"events: {_format_events(events or [])}\n"
         "---\n\n"
@@ -230,6 +269,7 @@ def read_note(slug: str) -> dict | None:
         "created": meta["created"],
         "updated": meta["updated"],
         "source": meta["source"] or "explicit",
+        "origin": meta["origin"] or "conversation",
         "tags": meta["tags"],
         "events": meta["events"],
         "body": body,
@@ -257,6 +297,7 @@ def list_notes() -> list[dict]:
             "created": note["created"],
             "updated": note["updated"],
             "source": note["source"],
+            "origin": note["origin"],
         })
     notes.sort(key=lambda n: n["updated"], reverse=True)
     return notes
@@ -265,7 +306,8 @@ def list_notes() -> list[dict]:
 def write_note(
     title: str, content: str, tags: list[str] | None = None,
     source: str = "explicit", events: list[dict] | None = None,
-    replace: bool = False,
+    replace: bool = False, replace_events: bool = False,
+    origin: str = "conversation",
 ) -> dict:
     """Create or UPDATE a note. If a note with the same slug exists, append
     the new content to its body and bump `updated` (and union the tags and
@@ -290,6 +332,24 @@ def write_note(
         page rather than an ever-growing append log. `created`/`source` are
         still preserved; tags/events still merge. The `_log.md` op log
         (append_log) is the audit trail that makes destructive rewrites safe.
+
+    `replace_events` (Phase 21) controls event-list semantics on an existing
+    note:
+      * False (default) — UNION the supplied events with the note's existing
+        ones (so re-reflection adds deadlines without dropping old ones).
+      * True — REPLACE the note's events with exactly the supplied list. This is
+        the foreground CORRECTION path (update_memory): when the user says an
+        interview "moved to Thursday", the note must show ONLY Thursday, not
+        Monday+Thursday. ONLY the foreground explicit-correction path passes
+        this — background reflection NEVER does (it would risk gemma silently
+        dropping good dates; the destructive-event-rewrite capability is
+        deliberately foreground-only, mirroring the Part 1 safety boundary).
+
+    `origin` (Phase 21) records WHERE a note came from — "conversation"
+    (default), "calendar", or "email". Set on CREATE by the background external-
+    source sweeps; on UPDATE the existing note's origin is PRESERVED (a property
+    of the first write, exactly like `source`), so the /memory provenance chip
+    stays honest even when a feed later touches a conversation note.
     """
     os.makedirs(MEMORY_DIR, exist_ok=True)
     tags = tags or []
@@ -307,7 +367,13 @@ def write_note(
         for t in tags:
             if t not in merged_tags:
                 merged_tags.append(t)
-        merged_events = _merge_events(existing["events"], events)
+        if replace_events:
+            # Foreground correction: the supplied events stand alone (dedup +
+            # drop dateless), overwriting the note's old dates instead of
+            # accumulating both the stale and corrected ones.
+            merged_events = _merge_events([], events)
+        else:
+            merged_events = _merge_events(existing["events"], events)
         if replace:
             # Reconcile: clean rewrite of the page body.
             body = content.strip()
@@ -319,15 +385,20 @@ def write_note(
             else:
                 body = content.strip()
         title = existing["title"] or title
-        note_source = existing["source"] or "explicit"  # preserve origin
-        text = _render_note(title, created, today, merged_tags, body, note_source, merged_events)
+        note_source = existing["source"] or "explicit"  # preserve how it originated
+        note_origin = existing.get("origin") or "conversation"  # preserve provenance
+        text = _render_note(
+            title, created, today, merged_tags, body, note_source,
+            merged_events, note_origin,
+        )
         final_tags = merged_tags
         final_events = merged_events
     else:
         action = "created"
         note_source = source
+        note_origin = origin
         final_events = _merge_events([], events)  # dedup + drop dateless
-        text = _render_note(title, today, today, tags, content, source, final_events)
+        text = _render_note(title, today, today, tags, content, source, final_events, origin)
         final_tags = tags
 
     tmp = path + ".tmp"
@@ -343,6 +414,7 @@ def write_note(
         "tags": final_tags,
         "events": final_events,
         "source": note_source,
+        "origin": note_origin,
         "updated": today,
     }
 
