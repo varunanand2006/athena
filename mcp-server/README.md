@@ -1,10 +1,14 @@
 # Athena MCP Server
 
 Rust HTTP/SSE MCP server that proxies tool calls to the in-cluster Athena
-agent. **LAN-only in Phase 12** — no auth, no Cloudflare Tunnel. Do not
-expose this server publicly until Phase 13 adds the auth middleware.
+agent. Reachable on the LAN and, since **Phase 13**, over a Cloudflare Tunnel
+gated by **bearer-token auth** (`MCP_AUTH_TOKEN`). Every `/mcp` request is
+checked before it reaches the proxy; the middleware **fails closed** (rejects
+all requests with 401 when the token is unset). `/healthz` stays outside the
+auth layer for k8s probes.
 
 - Transport: streamable HTTP (`POST /mcp` + SSE)
+- Auth: `Authorization: Bearer <MCP_AUTH_TOKEN>` on `/mcp` (Phase 13)
 - Source: `src/` (this directory) — entry point `main.rs`
 - Cluster manifests: `../cluster/mcp-server/`
 - LAN URL: `http://mcp.local/mcp`

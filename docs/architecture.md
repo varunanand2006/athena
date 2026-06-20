@@ -11,7 +11,7 @@ Athena is a self-hosted AI assistant running on a bare-metal k3s cluster. It act
 |------|----|-----|------|
 | vlinux1 | 192.168.96.200 | 8GB | k3s control plane, PostgreSQL, Traefik ingress |
 | vlinux2 | 192.168.96.202 | 16GB | Frontend, internship hunter, LeetCode poller, Ingestion (+ document PVC) |
-| xdev-sr | 192.168.96.201 | 16GB | Ollama, Qdrant, SearXNG, Agent |
+| xdev-sr | 192.168.96.201 | 16GB | Ollama, Qdrant, SearXNG, Agent, MCP server (+ memory vault PVC) |
 | varunlaptop | 192.168.96.13 | — | Personal laptop, not a cluster node |
 
 All inference is CPU-only. No GPUs.
@@ -32,10 +32,12 @@ All inference is CPU-only. No GPUs.
 | Search | SearXNG | ✅ Running | Web search tool for the agent |
 | Ingestion | LlamaIndex + FastAPI + APScheduler | ✅ Running | Document upload, persistent PVC store, full-text caching, summarization, one summary vector per document, folder watcher, catalog (Postgres) + TOC |
 | Document PVC | k3s local-path (10Gi, vlinux2) | ✅ Running | Source-of-truth file store at `/data/documents`; survives pod restarts |
+| Memory vault | Obsidian-native markdown on PVC (xdev-sr) | ✅ Running | Persistent agent memory at `/data/memory`: ambient recall each turn, background reflection, temporal `events`, `[[wikilinks]]`, calendar/email feeds |
+| Gmail / Calendar | Google APIs (read-only scopes) | ✅ Running | On-demand `search_email` / `get_calendar_events` lookups; also feed memory (label-gated email, curated calendar) |
 | Internship hunter | APScheduler (Python) | ✅ Running | Daily GitHub README scrape → LLM score → Postgres |
 | LeetCode poller | APScheduler (Python) | ✅ Running | Daily GraphQL sync, Ollama analysis queue |
-| Frontend | React + Vite + nginx | ✅ Running | Chat UI, internship dashboard, LeetCode stats |
-| MCP server | Rust (axum, tokio) | 🔲 Not started | Custom tool definitions for the agent |
+| Frontend | React + Vite + nginx | ✅ Running | Chat UI (SSE streaming), internship/LeetCode dashboards, document + memory + graph views |
+| MCP server | Rust (axum, tokio) | ✅ Running | Thin `/tools/*` proxy for Claude Code; bearer-token auth + Cloudflare Tunnel (Phase 13) |
 | Automation | n8n | 🔲 Planned | Scheduled pipelines, email polling |
 | Notifications | Twilio | 🔲 Planned | SMS alerts for high-priority events |
 

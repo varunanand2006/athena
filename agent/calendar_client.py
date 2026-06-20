@@ -14,7 +14,6 @@ GCAL_CLIENT_ID, GCAL_CLIENT_SECRET, GCAL_REFRESH_TOKEN.
 """
 
 import os
-from datetime import datetime, timezone
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build

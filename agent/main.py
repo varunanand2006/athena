@@ -600,8 +600,6 @@ def get_calendar_events(timeframe: str) -> str:
     such as "today", "tomorrow", "this week", "next 7 days", "next month".
     This is READ-ONLY: you can view events but CANNOT create, edit, or delete
     anything. Returns up to 10 events; answer from them."""
-    from datetime import datetime, timedelta, timezone
-
     now = datetime.now(timezone.utc)
 
     tf = timeframe.lower().strip()
@@ -646,6 +644,27 @@ def get_calendar_events(timeframe: str) -> str:
         if ev["description"]:
             lines.append(f"  {ev['description']}")
     return "\n".join(lines)
+
+
+# The single tool set handed to the chat agent. Both /chat and /chat/stream
+# build their react agent from this one list so the two paths can never drift
+# (an earlier copy-paste left update_memory off the streaming path).
+CHAT_TOOLS = [
+    web_search,
+    find_documents,
+    load_document,
+    lookup_leetcode,
+    list_documents,
+    get_table_of_contents,
+    get_document_summary,
+    write_memory,
+    update_memory,
+    list_memories,
+    search_memory,
+    upcoming,
+    search_email,
+    get_calendar_events,
+]
 
 
 SYSTEM_PROMPT = (
@@ -868,32 +887,80 @@ def _straggler_reflection_sweep():
     _run_external_feeds()
 
 
+# --- Shared chat bookkeeping ------------------------------------------------
+# /chat and /chat/stream do identical Postgres work around the agent call.
+# Factored here so the two paths can never diverge (e.g. one persisting a turn
+# differently, or forgetting to bump updated_at and silently breaking reflection).
+
+
+def _load_or_create_conversation(req: ChatRequest) -> tuple[str, list[dict], bool]:
+    """Resolve the conversation for a chat request. With no id, create a new
+    row titled from the first message; otherwise load its prior messages as
+    history. Returns (conversation_id, history, is_new_conversation)."""
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            if req.conversation_id is None:
+                cur.execute(
+                    "INSERT INTO conversations (title) VALUES (%s) RETURNING id",
+                    (req.message[:40],),
+                )
+                conversation_id = str(cur.fetchone()[0])
+                history: list[dict] = []
+                is_new = True
+            else:
+                conversation_id = req.conversation_id
+                cur.execute(
+                    "SELECT role, content FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
+                    (conversation_id,),
+                )
+                history = [{"role": row[0], "content": row[1]} for row in cur.fetchall()]
+                is_new = False
+        conn.commit()
+    finally:
+        conn.close()
+    return conversation_id, history, is_new
+
+
+def _persist_turn(conversation_id: str, user_message: str, assistant_message: str) -> None:
+    """Persist one user+assistant exchange and bump the conversation's
+    updated_at watermark (which also re-arms reflection for this conversation)."""
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
+                (conversation_id, "user", user_message),
+            )
+            cur.execute(
+                "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
+                (conversation_id, "assistant", assistant_message),
+            )
+            cur.execute(
+                "UPDATE conversations SET updated_at = now() WHERE id = %s",
+                (conversation_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _maybe_trigger_reflection(is_new_conversation: bool, conversation_id: str) -> None:
+    """On a new-conversation boundary, kick off the reflection sweep in a daemon
+    thread so it never blocks the response (Phase 15)."""
+    if not is_new_conversation:
+        return
+    threading.Thread(
+        target=_trigger_reflection_sweep,
+        args=(conversation_id,),
+        daemon=True,
+    ).start()
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     try:
-        conn = pg_conn()
-        is_new_conversation = False
-        try:
-            with conn.cursor() as cur:
-                if req.conversation_id is None:
-                    title = req.message[:40]
-                    cur.execute(
-                        "INSERT INTO conversations (title) VALUES (%s) RETURNING id",
-                        (title,),
-                    )
-                    conversation_id = str(cur.fetchone()[0])
-                    is_new_conversation = True
-                    history = []
-                else:
-                    conversation_id = req.conversation_id
-                    cur.execute(
-                        "SELECT role, content FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
-                        (conversation_id,),
-                    )
-                    history = [{"role": row[0], "content": row[1]} for row in cur.fetchall()]
-            conn.commit()
-        finally:
-            conn.close()
+        conversation_id, history, is_new_conversation = _load_or_create_conversation(req)
 
         messages = history + [{"role": "user", "content": req.message}]
 
@@ -901,26 +968,7 @@ async def chat(req: ChatRequest):
         # Phase 16: inject the full-vault memory block + recall policy on the
         # chat path only. The background path keeps the bare prompt.
         prompt = _build_chat_system_prompt() if req.mode == "chat" else SYSTEM_PROMPT
-        agent = create_react_agent(
-            llm,
-            tools=[
-                web_search,
-                find_documents,
-                load_document,
-                lookup_leetcode,
-                list_documents,
-                get_table_of_contents,
-                get_document_summary,
-                write_memory,
-                update_memory,
-                list_memories,
-                search_memory,
-                upcoming,
-                search_email,
-                get_calendar_events,
-            ],
-            prompt=prompt,
-        )
+        agent = create_react_agent(llm, tools=CHAT_TOOLS, prompt=prompt)
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             _executor,
@@ -929,34 +977,8 @@ async def chat(req: ChatRequest):
         last = result["messages"][-1]
         response_text = last.content
 
-        conn = pg_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
-                    (conversation_id, "user", req.message),
-                )
-                cur.execute(
-                    "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
-                    (conversation_id, "assistant", response_text),
-                )
-                cur.execute(
-                    "UPDATE conversations SET updated_at = now() WHERE id = %s",
-                    (conversation_id,),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-
-        # Trigger reflection sweep on new conversation boundary (Phase 15).
-        # Runs in background so it never blocks the response.
-        if is_new_conversation:
-            thread = threading.Thread(
-                target=_trigger_reflection_sweep,
-                args=(conversation_id,),
-                daemon=True,
-            )
-            thread.start()
+        _persist_turn(conversation_id, req.message, response_text)
+        _maybe_trigger_reflection(is_new_conversation, conversation_id)
 
         return ChatResponse(response=response_text, conversation_id=conversation_id)
     except Exception as e:
@@ -973,31 +995,8 @@ async def chat_stream(req: ChatRequest):
     """
     import json
 
-    # --- conversation bookkeeping (identical to /chat) ---
     try:
-        conn = pg_conn()
-        is_new_conversation = False
-        try:
-            with conn.cursor() as cur:
-                if req.conversation_id is None:
-                    title = req.message[:40]
-                    cur.execute(
-                        "INSERT INTO conversations (title) VALUES (%s) RETURNING id",
-                        (title,),
-                    )
-                    conversation_id = str(cur.fetchone()[0])
-                    is_new_conversation = True
-                    history = []
-                else:
-                    conversation_id = req.conversation_id
-                    cur.execute(
-                        "SELECT role, content FROM messages WHERE conversation_id = %s ORDER BY created_at ASC",
-                        (conversation_id,),
-                    )
-                    history = [{"role": row[0], "content": row[1]} for row in cur.fetchall()]
-            conn.commit()
-        finally:
-            conn.close()
+        conversation_id, history, is_new_conversation = _load_or_create_conversation(req)
     except Exception as e:
         async def error_gen():
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
@@ -1006,25 +1005,7 @@ async def chat_stream(req: ChatRequest):
     messages = history + [{"role": "user", "content": req.message}]
     llm = get_llm(req.mode)
     prompt = _build_chat_system_prompt() if req.mode == "chat" else SYSTEM_PROMPT
-    agent = create_react_agent(
-        llm,
-        tools=[
-            web_search,
-            find_documents,
-            load_document,
-            lookup_leetcode,
-            list_documents,
-            get_table_of_contents,
-            get_document_summary,
-            write_memory,
-            list_memories,
-            search_memory,
-            upcoming,
-            search_email,
-            get_calendar_events,
-        ],
-        prompt=prompt,
-    )
+    agent = create_react_agent(llm, tools=CHAT_TOOLS, prompt=prompt)
 
     async def event_generator():
         response_text = ""
@@ -1056,34 +1037,8 @@ async def chat_stream(req: ChatRequest):
                         tool_output = tool_output[:500] + "..."
                     yield f"event: tool_end\ndata: {json.dumps({'tool': name, 'output': str(tool_output)})}\n\n"
 
-            # Persist messages to Postgres
-            conn = pg_conn()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
-                        (conversation_id, "user", req.message),
-                    )
-                    cur.execute(
-                        "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
-                        (conversation_id, "assistant", response_text),
-                    )
-                    cur.execute(
-                        "UPDATE conversations SET updated_at = now() WHERE id = %s",
-                        (conversation_id,),
-                    )
-                conn.commit()
-            finally:
-                conn.close()
-
-            # Trigger reflection on new-conversation boundary
-            if is_new_conversation:
-                thread = threading.Thread(
-                    target=_trigger_reflection_sweep,
-                    args=(conversation_id,),
-                    daemon=True,
-                )
-                thread.start()
+            _persist_turn(conversation_id, req.message, response_text)
+            _maybe_trigger_reflection(is_new_conversation, conversation_id)
 
             yield f"event: done\ndata: {json.dumps({'response': response_text, 'conversation_id': conversation_id})}\n\n"
 
@@ -1317,7 +1272,6 @@ def delete_memory_note(slug: str):
     if note is None:
         raise HTTPException(status_code=404, detail=f"No memory note '{slug}'.")
 
-    import os
     path = os.path.join(memory_vault.MEMORY_DIR, f"{slug}.md")
     try:
         os.unlink(path)

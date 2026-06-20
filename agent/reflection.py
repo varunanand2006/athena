@@ -29,8 +29,7 @@ rewrites) — destructive background rewrites remain out of scope.
 import logging
 import os
 import psycopg2
-import httpx
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from langchain_ollama import ChatOllama
 
 logger = logging.getLogger(__name__)
@@ -497,7 +496,6 @@ def reflect_on_calendar() -> bool:
     real failure. Degrades silently if the gcal-secret isn't mounted.
     """
     import calendar_client
-    from datetime import timedelta
 
     now = datetime.now(timezone.utc)
     last = _read_sweep_marker(_CALENDAR_SWEEP_FILE)

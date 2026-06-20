@@ -186,6 +186,90 @@ export default function ChatView({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streaming])
 
+  // ─── Shared SSE stream reader ────────────────────────────────────────
+  // Drives one /chat/stream request, applying token / tool_start / tool_end /
+  // done / error events to the assistant placeholder message. Returns the
+  // server's conversation id (from the `done` event) or null. Shared by the
+  // input-box send() and the regenerate sendMessage() so the SSE parsing lives
+  // in exactly one place.
+
+  const runStream = useCallback(
+    async (text: string, assistantId: string, signal: AbortSignal): Promise<string | null> => {
+      const res = await fetch('/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, conversation_id: conversationId }),
+        signal,
+      })
+
+      if (!res.ok || !res.body) throw new Error('Stream failed')
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let fullText = ''
+      let tools: ToolCall[] = []
+      let finalConversationId: string | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let eventType = ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ') && eventType) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (eventType === 'token') {
+                fullText += data.token
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === assistantId ? { ...m, content: fullText } : m))
+                )
+              } else if (eventType === 'tool_start') {
+                tools = [...tools, { tool: data.tool, input: data.input || {}, status: 'running' }]
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === assistantId ? { ...m, toolCalls: [...tools] } : m))
+                )
+              } else if (eventType === 'tool_end') {
+                tools = tools.map((t) =>
+                  t.tool === data.tool && t.status === 'running'
+                    ? { ...t, status: 'done' as const, output: data.output }
+                    : t
+                )
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === assistantId ? { ...m, toolCalls: [...tools] } : m))
+                )
+              } else if (eventType === 'done') {
+                finalConversationId = data.conversation_id
+                // Final content from server is authoritative
+                if (data.response) {
+                  fullText = data.response
+                  setMessages((prev) =>
+                    prev.map((m) => (m.id === assistantId ? { ...m, content: fullText } : m))
+                  )
+                }
+              } else if (eventType === 'error') {
+                setError(data.error || 'Unknown streaming error')
+              }
+            } catch {
+              // malformed JSON line, skip
+            }
+            eventType = ''
+          }
+        }
+      }
+
+      return finalConversationId
+    },
+    [conversationId, setMessages]
+  )
+
   // ─── Streaming send ──────────────────────────────────────────────────
 
   const send = useCallback(async () => {
@@ -221,91 +305,7 @@ export default function ChatView({
     abortRef.current = controller
 
     try {
-      const res = await fetch('/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, conversation_id: conversationId }),
-        signal: controller.signal,
-      })
-
-      if (!res.ok || !res.body) {
-        throw new Error('Stream failed')
-      }
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let fullText = ''
-      let tools: ToolCall[] = []
-      let finalConversationId: string | null = null
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        let eventType = ''
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim()
-          } else if (line.startsWith('data: ') && eventType) {
-            try {
-              const data = JSON.parse(line.slice(6))
-
-              if (eventType === 'token') {
-                fullText += data.token
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId ? { ...m, content: fullText } : m
-                  )
-                )
-              } else if (eventType === 'tool_start') {
-                const newTool: ToolCall = {
-                  tool: data.tool,
-                  input: data.input || {},
-                  status: 'running',
-                }
-                tools = [...tools, newTool]
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId ? { ...m, toolCalls: [...tools] } : m
-                  )
-                )
-              } else if (eventType === 'tool_end') {
-                tools = tools.map((t) =>
-                  t.tool === data.tool && t.status === 'running'
-                    ? { ...t, status: 'done' as const, output: data.output }
-                    : t
-                )
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId ? { ...m, toolCalls: [...tools] } : m
-                  )
-                )
-              } else if (eventType === 'done') {
-                finalConversationId = data.conversation_id
-                // Final content from server is authoritative
-                if (data.response) {
-                  fullText = data.response
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantId ? { ...m, content: fullText } : m
-                    )
-                  )
-                }
-              } else if (eventType === 'error') {
-                setError(data.error || 'Unknown streaming error')
-              }
-            } catch {
-              // malformed JSON line, skip
-            }
-            eventType = ''
-          }
-        }
-      }
+      const finalConversationId = await runStream(text, assistantId, controller.signal)
 
       if (finalConversationId && !conversationId) {
         setConversationId(finalConversationId)
@@ -344,7 +344,7 @@ export default function ChatView({
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, conversationId, setMessages, setConversationId, onConversationUpdate])
+  }, [input, streaming, conversationId, runStream, setMessages, setConversationId, onConversationUpdate])
 
   function stopGeneration() {
     abortRef.current?.abort()
@@ -388,71 +388,7 @@ export default function ChatView({
     abortRef.current = controller
 
     try {
-      const res = await fetch('/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, conversation_id: conversationId }),
-        signal: controller.signal,
-      })
-
-      if (!res.ok || !res.body) throw new Error('Stream failed')
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let fullText = ''
-      let tools: ToolCall[] = []
-      let finalConversationId: string | null = null
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        let eventType = ''
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim()
-          } else if (line.startsWith('data: ') && eventType) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (eventType === 'token') {
-                fullText += data.token
-                setMessages((prev) =>
-                  prev.map((m) => m.id === assistantId ? { ...m, content: fullText } : m)
-                )
-              } else if (eventType === 'tool_start') {
-                tools = [...tools, { tool: data.tool, input: data.input || {}, status: 'running' }]
-                setMessages((prev) =>
-                  prev.map((m) => m.id === assistantId ? { ...m, toolCalls: [...tools] } : m)
-                )
-              } else if (eventType === 'tool_end') {
-                tools = tools.map((t) =>
-                  t.tool === data.tool && t.status === 'running'
-                    ? { ...t, status: 'done' as const, output: data.output } : t
-                )
-                setMessages((prev) =>
-                  prev.map((m) => m.id === assistantId ? { ...m, toolCalls: [...tools] } : m)
-                )
-              } else if (eventType === 'done') {
-                finalConversationId = data.conversation_id
-                if (data.response) {
-                  fullText = data.response
-                  setMessages((prev) =>
-                    prev.map((m) => m.id === assistantId ? { ...m, content: fullText } : m)
-                  )
-                }
-              } else if (eventType === 'error') {
-                setError(data.error || 'Unknown streaming error')
-              }
-            } catch { /* skip */ }
-            eventType = ''
-          }
-        }
-      }
+      const finalConversationId = await runStream(text, assistantId, controller.signal)
 
       if (finalConversationId && !conversationId) {
         setConversationId(finalConversationId)
@@ -467,7 +403,7 @@ export default function ChatView({
       setStreaming(false)
       abortRef.current = null
     }
-  }, [streaming, conversationId, setMessages, setConversationId, onConversationUpdate])
+  }, [streaming, conversationId, runStream, setMessages, setConversationId, onConversationUpdate])
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {

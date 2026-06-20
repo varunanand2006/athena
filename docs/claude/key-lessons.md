@@ -80,13 +80,15 @@ Hard-won implementation lessons grouped by topic. Always relevant — don't skip
 
 ## Agent & models
 
-- **gemma4:e2b is a thinking model** — raw `/api/generate` returns an empty `response` because all tokens are consumed by internal reasoning. Use `/api/chat` with `"think": false` for structured output tasks. Read from `message.content`, not `response`.
+- **gemma4:e2b is a thinking model** — raw `/api/generate` returns an empty `response` because all tokens are consumed by internal reasoning. Use `/api/chat` with `"think": false` for structured output tasks. Read from `message.content`, not `response`. **Every Ollama-calling service must use this pattern** (`ingestion`, `internship`, `leetcode`): the `leetcode` poller was found still on the old `/api/generate` path during a cleanup pass — it had been silently writing empty `analysis_text` rows that `lookup_leetcode` then reasoned over. When adding a new Ollama call, copy the working `/api/chat` block, and treat an empty `message.content` as a non-success (skip/retry), never store it.
 
 - **Ollama token limits for CPU inference** — always pass `num_ctx: 2048, num_predict: 150` to keep responses fast on CPU. Set httpx timeouts to 90s per call.
 
 - **Match retrieval architecture to corpus shape** — chunk-level RAG is overkill for a small library of short documents. Summary-level routing (one vector per document) + full-document load from Postgres is cheaper at ingest and gives the LLM strictly more context. Tradeoff: weak on very long documents; the summary becomes a **required** ingest artifact — empty summary must be a hard `_mark_failed`, not a partial success.
 
 - **Agent two-step retrieval** — keep "find the right document" and "read its content" as separate tools (`find_documents` + `load_document`), not one fused search. System prompt: never answer substantive questions from the summary — always call `load_document` and answer from full text.
+
+- **`/chat` and `/chat/stream` must share their wiring** — the two endpoints duplicate the same agent setup and Postgres bookkeeping. A hand-copied tool list once drifted (`update_memory` was added to `/chat` but not the streaming path, silently disabling memory corrections whenever the frontend streamed — which it does by default). Keep the tool set in one module-level `CHAT_TOOLS` constant and the conversation bookkeeping in shared helpers (`_load_or_create_conversation` / `_persist_turn` / `_maybe_trigger_reflection`) so the paths can't diverge. The frontend has the same trap: `ChatView` had two copies of the SSE reader — factor it into one `runStream` helper.
 
 ---
 

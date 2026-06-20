@@ -192,13 +192,26 @@ def process_job() -> None:
             try:
                 with httpx.Client(timeout=120) as client:
                     resp = client.post(
-                        f"{OLLAMA_BASE_URL}/api/generate",
-                        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+                        f"{OLLAMA_BASE_URL}/api/chat",
+                        json={
+                            "model": OLLAMA_MODEL,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "think": False,
+                            "stream": False,
+                            "options": {"num_ctx": 2048, "num_predict": 200},
+                        },
                     )
                     resp.raise_for_status()
-                analysis = resp.json().get("response", "").strip()
+                analysis = resp.json().get("message", {}).get("content", "").strip()
             except Exception as exc:
                 log.error("Ollama request failed for %s: %s", slug, exc)
+                continue
+
+            if not analysis:
+                # Empty model output (the gemma thinking-model failure mode):
+                # leave the item queued so the next run retries instead of
+                # storing a blank analysis and dropping it from the queue.
+                log.warning("Empty analysis for %s — leaving queued for retry", slug)
                 continue
 
             with conn:
