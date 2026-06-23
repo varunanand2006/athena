@@ -1,0 +1,15 @@
+# ClusterIP so Grafana (in-namespace) can reach Prometheus as its datasource.
+# Not exposed via ingress — only Grafana is user-facing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090

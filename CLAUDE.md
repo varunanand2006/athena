@@ -46,7 +46,20 @@ If you're unsure whether something is a planning question or an implementation q
 - **Twilio** for SMS notifications (planned)
 
 ## Current phase
-**Phase 21 (complete)** — Safe in-chat memory correction + automatic external source feeds.
+**Phase 22 (implemented, pending cluster rollout)** — Observability: Prometheus metrics + structured JSON logs.
+
+Turns "I built services" into "I operate a system." Metrics-first by design; Loki, tracing, and alerting are explicitly deferred (see ADR 013).
+
+- **Shared `metrics.py`** — a self-contained module COPIED verbatim into `agent/`, `ingestion/`, `internship/`, `leetcode/` (the four services share no Python package, so keep the copies in sync by hand, like the `prometheus-client`/`langchain-openai` Dockerfile trap). Defines the `athena_*` metric set, `track_llm`/`track_job` context managers, RAG counters, a pure-ASGI latency middleware, a headless `start_metrics_server`, and `configure_logging` (JSON-lines on stdout). Every series carries a `service` label from `SERVICE_NAME`; labels are deliberately low-cardinality.
+- **Instrumentation** — LLM calls (`athena_llm_request_seconds`/`_tokens_total`/`_errors_total`, labeled by model + operation), background jobs (`athena_job_seconds`/`_failures_total`/`_empty_result_total` — the last surfaces the silent-failure class, e.g. empty summary / empty analysis), HTTP (FastAPI middleware, templated route labels), and RAG (`athena_rag_lookups_total`/`_empty_total`). FastAPI services (`agent`, `ingestion`) mount `/metrics` on the app port; headless schedulers (`internship`, `leetcode`) expose it from a daemon-thread listener on `METRICS_PORT` (9100), started before the run-once-then-schedule handoff.
+- **Monitoring stack** — single Prometheus + single Grafana, raw YAML under `cluster/monitoring/`, pinned to vlinux2 (NOT the 8GB control plane), no Helm/Operator. Annotation-based pod SD (`prometheus.io/scrape|port|path`) via a scoped `ClusterRole` — no ServiceMonitor CRDs. Grafana datasource + the committed **Athena Overview** dashboard are provisioned from ConfigMaps (code in the repo, not click-ops). Grafana at `grafana.local`.
+- **Deployment** — rebuilds ALL FOUR service images (`:phase22`) + applies `cluster/monitoring/`. Needs `kubectl create namespace monitoring` and a `grafana-secret` (`-n monitoring`). Edit `dashboards/athena-overview.json` (readable source) and regenerate `grafana-dashboards-configmap.yaml`, don't hand-edit the embedded block.
+
+See `docs/phases/phase-22-observability.md` and `docs/adr/013-observability-stack.md`.
+
+---
+
+### Phase 21 — Safe in-chat memory correction + automatic external source feeds
 
 Two extensions to *how memory gets written* (vault format unchanged except a new `origin` field):
 
@@ -71,6 +84,7 @@ See `docs/phases/phase-21-memory-feeds.md`, `docs/adr/012-external-memory-feeds.
 | 18    | Interlinked memory / wiki graph (`[[wikilinks]]`, concept pages) |
 | 19–20 | Gmail + Google Calendar read-only lookup |
 | 21    | Safe foreground memory correction (`update_memory`) + automatic calendar/labeled-email feeds (`origin` provenance) |
+| 22    | Observability — Prometheus metrics + structured JSON logs (hand-rolled Prometheus + Grafana on vlinux2, annotation-based pod SD) |
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`

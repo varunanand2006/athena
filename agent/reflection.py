@@ -33,6 +33,8 @@ from datetime import date, datetime, timedelta, timezone
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
+import metrics
+
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
@@ -60,6 +62,26 @@ def _reflection_llm():
             temperature=0, num_ctx=4096, num_predict=512,
         )
     return ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY, temperature=0)
+
+
+def _reflection_model_name() -> str:
+    return OLLAMA_MODEL if LLM_BACKEND == "ollama" else OPENAI_CHAT_MODEL
+
+
+def _invoke_reflection_llm(llm, prompt: str, operation: str):
+    """Phase 22: time the reflection LLM call and record token usage. Wraps
+    llm.invoke so every background sweep contributes to athena_llm_request_seconds
+    / athena_llm_tokens_total under its `operation` label."""
+    model = _reflection_model_name()
+    with metrics.track_llm(model, operation):
+        result = llm.invoke(prompt)
+    usage = getattr(result, "usage_metadata", None) or {}
+    metrics.record_tokens(
+        model,
+        usage.get("input_tokens", 0) or 0,
+        usage.get("output_tokens", 0) or 0,
+    )
+    return result
 
 # --- Phase 21: external-source sweep config --------------------------------
 # Calendar: how far forward to sweep, and a min interval between sweeps so the
@@ -240,6 +262,7 @@ def _sanitize_events(raw) -> list[dict]:
     return memory_vault.sanitize_events(raw)
 
 
+@metrics.track_job("reflection")
 def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
     """Reflect on a single conversation and capture durable memories.
 
@@ -263,7 +286,7 @@ def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
         # JSON, which would fail the parse and silently capture nothing).
         prompt = _reflection_prompt(messages, memory_index)
         llm = _reflection_llm()
-        result = llm.invoke(prompt)
+        result = _invoke_reflection_llm(llm, prompt, "reflection")
         response_text = result.content
 
         # Parse decisions
@@ -503,6 +526,7 @@ Return ONLY a JSON array of decisions (or an empty array [] if nothing is worth 
 Return ONLY the JSON array, no other text."""
 
 
+@metrics.track_job("calendar_feed")
 def reflect_on_calendar() -> bool:
     """Sweep upcoming Google Calendar events into the memory vault (Phase 21).
 
@@ -544,7 +568,7 @@ def reflect_on_calendar() -> bool:
     prompt = _calendar_reflection_prompt(events, memory_index)
     llm = _reflection_llm()
     try:
-        result = llm.invoke(prompt)
+        result = _invoke_reflection_llm(llm, prompt, "reflection")
         decisions = _parse_reflection_response(result.content)
     except Exception as e:
         logger.error(f"Calendar sweep: reflection LLM failed: {e}")
@@ -654,6 +678,7 @@ Return ONLY a JSON array of decisions (or an empty array [] if nothing is worth 
 Return ONLY the JSON array, no other text."""
 
 
+@metrics.track_job("email_feed")
 def reflect_on_labeled_email() -> bool:
     """Sweep label-filtered Gmail into the memory vault (Phase 21).
 
@@ -710,7 +735,7 @@ def reflect_on_labeled_email() -> bool:
     prompt = _email_reflection_prompt(enriched, memory_index)
     llm = _reflection_llm()
     try:
-        result = llm.invoke(prompt)
+        result = _invoke_reflection_llm(llm, prompt, "reflection")
         decisions = _parse_reflection_response(result.content)
     except Exception as e:
         logger.error(f"Email sweep: reflection LLM failed: {e}")

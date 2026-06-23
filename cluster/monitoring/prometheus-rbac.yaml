@@ -1,0 +1,39 @@
+# Phase 22 (ADR 013, decision 2): Prometheus uses kubernetes_sd_configs (role:pod)
+# to discover scrape targets, so it needs cluster-scoped read on pods/services/
+# endpoints (it discovers pods in the athena namespace from the monitoring
+# namespace). No Prometheus Operator → no ServiceMonitor CRDs, just this scoped
+# ClusterRole. get/list/watch only — never write.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/metrics
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring

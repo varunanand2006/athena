@@ -24,6 +24,8 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+import metrics
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant.athena.svc.cluster.local:6333")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
@@ -51,7 +53,8 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 EMBED_DIM = int(os.getenv("EMBED_DIM", "1536" if EMBED_BACKEND == "openai" else "768"))
 
 log = logging.getLogger("ingestion")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# Phase 22: JSON-lines logging on stdout + Prometheus metrics.
+metrics.configure_logging(logging.INFO)
 
 _PG_DSN = (
     f"postgresql://{os.getenv('POSTGRES_USER', 'athena')}"
@@ -72,6 +75,7 @@ def _mark_failed(document_id: str, reason: str) -> None:
     log and move on. The reaper job will eventually catch the row anyway.
     """
     log.error("marking document %s failed: %s", document_id, reason)
+    metrics.job_failure("ingest_worker")
     try:
         conn = pg_conn()
         try:
@@ -194,24 +198,30 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Athena Ingestion", lifespan=lifespan)
+metrics.instrument_fastapi(app)  # Phase 22: /metrics + latency middleware
 
 
 def _embed(text: str) -> list[float]:
+    model = EMBED_MODEL if EMBED_BACKEND == "ollama" else OPENAI_EMBED_MODEL
     with httpx.Client(timeout=60) as client:
         if EMBED_BACKEND == "ollama":
+            with metrics.track_llm(model, "embed"):
+                resp = client.post(
+                    f"{OLLAMA_BASE_URL}/api/embeddings",
+                    json={"model": EMBED_MODEL, "prompt": text},
+                )
+                resp.raise_for_status()
+            return resp.json()["embedding"]
+        with metrics.track_llm(model, "embed"):
             resp = client.post(
-                f"{OLLAMA_BASE_URL}/api/embeddings",
-                json={"model": EMBED_MODEL, "prompt": text},
+                f"{OPENAI_BASE_URL}/embeddings",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                json={"model": OPENAI_EMBED_MODEL, "input": text},
             )
             resp.raise_for_status()
-            return resp.json()["embedding"]
-        resp = client.post(
-            f"{OPENAI_BASE_URL}/embeddings",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": OPENAI_EMBED_MODEL, "input": text},
-        )
-        resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
+        body = resp.json()
+        metrics.record_openai_usage(model, body.get("usage"))
+        return body["data"][0]["embedding"]
 
 
 SUMMARY_PROMPT = """Summarize what this document is in 2-3 sentences. Be specific about its contents and purpose. Do not say "I" or explain yourself.
@@ -223,32 +233,39 @@ Document:
 def _generate_summary(text: str) -> str:
     snippet = text[:2000]
     prompt = SUMMARY_PROMPT.format(text=snippet)
+    model = OLLAMA_MODEL if LLM_BACKEND == "ollama" else OPENAI_CHAT_MODEL
     with httpx.Client(timeout=90) as client:
         if LLM_BACKEND == "ollama":
+            with metrics.track_llm(model, "summary"):
+                resp = client.post(
+                    f"{OLLAMA_BASE_URL}/api/chat",
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "think": False,
+                        "stream": False,
+                        "options": {"num_ctx": 2048, "num_predict": 150},
+                    },
+                )
+                resp.raise_for_status()
+            body = resp.json()
+            metrics.record_ollama_usage(model, body)
+            return body.get("message", {}).get("content", "").strip()
+        with metrics.track_llm(model, "summary"):
             resp = client.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
+                f"{OPENAI_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": OPENAI_CHAT_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
-                    "think": False,
-                    "stream": False,
-                    "options": {"num_ctx": 2048, "num_predict": 150},
+                    "temperature": 0,
+                    "max_tokens": 200,
                 },
             )
             resp.raise_for_status()
-            return resp.json().get("message", {}).get("content", "").strip()
-        resp = client.post(
-            f"{OPENAI_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={
-                "model": OPENAI_CHAT_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-                "max_tokens": 200,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        metrics.record_openai_usage(model, body.get("usage"))
+        return body["choices"][0]["message"]["content"].strip()
 
 
 class IngestResponse(BaseModel):
@@ -306,6 +323,7 @@ def _insert_catalog_row(file_path: Path, original_filename: str) -> str:
     return document_id
 
 
+@metrics.track_job("ingest_worker")
 def _embed_and_summarize(document_id: str, file_path: Path, original_filename: str) -> None:
     """Heavy work for summary-routing RAG: extract full text, summarize,
     embed the summary, upsert one Qdrant point, cache the full text on the
@@ -347,7 +365,13 @@ def _embed_and_summarize(document_id: str, file_path: Path, original_filename: s
             _mark_failed(document_id, "summary generation failed")
             return
         if not summary.strip():
-            log.warning("summary generation returned empty for %s", original_filename)
+            # Silent-failure class (key-lessons): an empty summary is the
+            # retrieval key, so it must be loud — count it AND mark the row failed.
+            metrics.job_empty_result("ingest_worker")
+            log.warning(
+                "summary generation returned empty",
+                extra={"job": "ingest_worker", "field": f"file={original_filename}"},
+            )
             _mark_failed(document_id, "summary generation returned empty")
             return
 

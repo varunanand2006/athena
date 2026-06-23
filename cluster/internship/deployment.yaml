@@ -15,15 +15,28 @@ spec:
     metadata:
       labels:
         app: internship-hunter
+      annotations:
+        # Phase 22: role:pod SD scrapes the daemon-thread metrics listener.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: "/metrics"
     spec:
       nodeSelector:
         kubernetes.io/hostname: vlinux2
       enableServiceLinks: false
       containers:
         - name: internship-hunter
-          image: athena-internship:20260623-openai
+          image: athena-internship:phase22
           imagePullPolicy: Never
+          ports:
+            - containerPort: 9100
+              name: metrics
           env:
+            # Phase 22: metric/log service label + the port start_metrics_server binds.
+            - name: SERVICE_NAME
+              value: "internship"
+            - name: METRICS_PORT
+              value: "9100"
             # Backend toggle — Gemma retired for latency. "openai" routes company
             # research + posting scoring to gpt-4o-mini; flip to "ollama" to
             # restore gemma4:e2b.

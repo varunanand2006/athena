@@ -12,6 +12,12 @@ spec:
     metadata:
       labels:
         app: agent
+      annotations:
+        # Phase 22: annotation-based pod service discovery (no ServiceMonitor CRD).
+        # Prometheus role:pod SD scrapes the app port directly at /metrics.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
       nodeSelector:
         workload: ai
@@ -24,7 +30,7 @@ spec:
             claimName: agent-memory
       containers:
         - name: agent
-          image: athena-agent:20260623-leetcode
+          image: athena-agent:phase22
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -33,6 +39,9 @@ spec:
             - name: memory
               mountPath: /data/memory
           env:
+            # Phase 22: labels every athena_* metric + JSON log line for this service.
+            - name: SERVICE_NAME
+              value: "agent"
             # Backend toggle — Gemma (gemma4:e2b on CPU) was retired for latency.
             # "openai" routes the background chat mode + reflection sweeps to
             # gpt-4o-mini and RAG embeddings to text-embedding-3-small. Flip both

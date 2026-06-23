@@ -1,0 +1,50 @@
+# Phase 22 (ADR 013, decision 2): annotation-based pod service discovery.
+# Prometheus keeps only pods carrying prometheus.io/scrape="true" and rewrites the
+# scrape address/path from the prometheus.io/port + prometheus.io/path annotations.
+# Adding a service to monitoring is then a two-line pod annotation — no CRD.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 30s
+      external_labels:
+        cluster: athena
+
+    scrape_configs:
+      # Self-scrape so the Targets page proves Prometheus itself is up (gate #2).
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+
+      # Annotation-driven discovery of every athena_* app pod.
+      - job_name: athena-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          # Only scrape pods that opt in.
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          # Honor a custom metrics path (defaults to /metrics).
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Rewrite the scrape address to podIP:<annotated port>.
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          # Friendly labels for dashboards/queries.
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app

@@ -1,0 +1,39 @@
+# Phase 22 (ADR 013): Grafana datasource + dashboard provider are PROVISIONED from
+# ConfigMaps, so they're code in the repo — not click-ops that vanish on a pod
+# restart. The Prometheus datasource is set default; the dashboard provider points
+# at /var/lib/grafana/dashboards, where the dashboard ConfigMap is mounted.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.monitoring.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: athena
+        orgId: 1
+        folder: Athena
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false

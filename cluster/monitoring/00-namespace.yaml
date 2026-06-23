@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    # Phase 22 (ADR 013): a dedicated namespace for the hand-rolled, metrics-first
+    # observability stack (single Prometheus + single Grafana, no Helm/Operator).
+    app.kubernetes.io/part-of: athena-observability

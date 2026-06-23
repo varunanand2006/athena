@@ -8,7 +8,10 @@ import httpx
 import psycopg2
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+import metrics
+
+# Phase 22: JSON-lines logging on stdout + Prometheus metrics.
+metrics.configure_logging(logging.INFO)
 log = logging.getLogger(__name__)
 
 POSTGRES_URL = (
@@ -30,30 +33,38 @@ OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
 
-def _chat(prompt: str, max_tokens: int = 150) -> str:
+def _chat(prompt: str, max_tokens: int = 150, operation: str = "chat") -> str:
     """Single-turn chat completion via the active backend (gpt-4o-mini by
     default, gemma4:e2b when LLM_BACKEND=ollama). Returns the message text.
-    Raises on transport errors so callers keep their existing fallbacks."""
+    Raises on transport errors so callers keep their existing fallbacks.
+    `operation` labels the metric (company_research | scoring)."""
+    model = OLLAMA_MODEL if LLM_BACKEND == "ollama" else OPENAI_CHAT_MODEL
     with httpx.Client(timeout=90) as client:
         if LLM_BACKEND == "ollama":
+            with metrics.track_llm(model, operation):
+                resp = client.post(
+                    f"{OLLAMA_URL}/api/chat",
+                    json={"model": OLLAMA_MODEL, "think": False,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "stream": False,
+                          "options": {"num_ctx": 2048, "num_predict": max_tokens}},
+                )
+                resp.raise_for_status()
+            body = resp.json()
+            metrics.record_ollama_usage(model, body)
+            return body["message"]["content"].strip()
+        with metrics.track_llm(model, operation):
             resp = client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={"model": OLLAMA_MODEL, "think": False,
+                f"{OPENAI_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                json={"model": OPENAI_CHAT_MODEL,
                       "messages": [{"role": "user", "content": prompt}],
-                      "stream": False,
-                      "options": {"num_ctx": 2048, "num_predict": max_tokens}},
+                      "temperature": 0, "max_tokens": max_tokens},
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
-        resp = client.post(
-            f"{OPENAI_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": OPENAI_CHAT_MODEL,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0, "max_tokens": max_tokens},
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        metrics.record_openai_usage(model, body.get("usage"))
+        return body["choices"][0]["message"]["content"].strip()
 
 GITHUB_SOURCES = [
     "vanshb03/Summer2027-Internships",
@@ -213,7 +224,7 @@ def research_company(company: str) -> str:
     )
 
     try:
-        return _chat(prompt, max_tokens=150)
+        return _chat(prompt, max_tokens=150, operation="company_research")
     except Exception as e:
         log.warning("LLM company research failed for %s: %s", company, e)
         return f"{company} is a technology company."
@@ -241,7 +252,7 @@ def score_posting(company: str, role: str, location: str, company_summary: str) 
     )
 
     try:
-        text = _chat(prompt, max_tokens=150)
+        text = _chat(prompt, max_tokens=150, operation="scoring")
 
         score, resume = 5, "General SWE"
         for line in text.splitlines():
@@ -347,6 +358,7 @@ def generate_report(conn) -> str:
 # Pipeline entry point
 # ---------------------------------------------------------------------------
 
+@metrics.track_job("internship_pipeline")
 def run_pipeline() -> None:
     log.info("=== Internship Hunter pipeline starting ===")
     conn = psycopg2.connect(POSTGRES_URL)
@@ -392,6 +404,9 @@ def run_pipeline() -> None:
 
 
 if __name__ == "__main__":
+    # Phase 22: expose /metrics before the run-once-then-schedule handoff.
+    metrics.start_metrics_server()
+
     scheduler = BlockingScheduler(timezone="America/New_York")
     scheduler.add_job(run_pipeline, "cron", hour=6, minute=0)
     log.info("Scheduler started — pipeline fires daily at 06:00 ET")

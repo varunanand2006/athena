@@ -12,6 +12,11 @@ spec:
     metadata:
       labels:
         app: ingestion
+      annotations:
+        # Phase 22: annotation-based pod service discovery — scrape app port /metrics.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
       nodeSelector:
         kubernetes.io/hostname: vlinux2
@@ -22,7 +27,7 @@ spec:
             claimName: ingestion-documents
       containers:
         - name: ingestion
-          image: athena-ingestion:20260623-openai
+          image: athena-ingestion:phase22
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -31,6 +36,9 @@ spec:
             - name: documents
               mountPath: /data/documents
           env:
+            # Phase 22: labels every athena_* metric + JSON log line for this service.
+            - name: SERVICE_NAME
+              value: "ingestion"
             # Backend toggle — Gemma was retired for latency. "openai" routes
             # summaries to gpt-4o-mini and embeddings to text-embedding-3-small
             # (1536-dim). Switching EMBED_BACKEND changes the vector dimension, so

@@ -13,9 +13,11 @@ RUN pip install --no-cache-dir \
     "psycopg2-binary>=2.9" \
     "apscheduler>=3.10" \
     "google-api-python-client>=2.0" \
-    "google-auth>=2.0"
+    "google-auth>=2.0" \
+    "prometheus-client>=0.20"
 
 COPY main.py .
+COPY metrics.py .
 COPY memory.py .
 COPY reflection.py .
 COPY gmail_client.py .

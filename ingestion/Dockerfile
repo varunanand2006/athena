@@ -13,8 +13,10 @@ RUN pip install --no-cache-dir \
     "python-multipart>=0.0.9" \
     "httpx>=0.27" \
     "psycopg2-binary>=2.9" \
-    "apscheduler>=3.10,<4"
+    "apscheduler>=3.10,<4" \
+    "prometheus-client>=0.20"
 
 COPY main.py .
+COPY metrics.py .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

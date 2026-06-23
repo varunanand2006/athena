@@ -1,0 +1,14 @@
+# Grafana's SQLite state (users, prefs, dashboard versions). local-path, pinned to
+# vlinux2 by the Deployment's nodeSelector so the PV co-locates with the pod.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi

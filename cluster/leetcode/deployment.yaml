@@ -12,17 +12,31 @@ spec:
     metadata:
       labels:
         app: leetcode
+      annotations:
+        # Phase 22: role:pod SD scrapes the daemon-thread metrics listener
+        # (this scheduler has no HTTP server of its own — no Service needed).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: "/metrics"
     spec:
       nodeSelector:
         kubernetes.io/hostname: vlinux2
       enableServiceLinks: false
       containers:
         - name: leetcode
-          image: athena-leetcode:20260623-leetcode
+          image: athena-leetcode:phase22
           imagePullPolicy: Never
+          ports:
+            - containerPort: 9100
+              name: metrics
           env:
             - name: LEETCODE_USERNAME
               value: "varunanand2006"
+            # Phase 22: metric/log service label + the port start_metrics_server binds.
+            - name: SERVICE_NAME
+              value: "leetcode"
+            - name: METRICS_PORT
+              value: "9100"
             # Backend toggle — Gemma retired for latency. "openai" sends problem
             # analysis to gpt-4o-mini; flip to "ollama" to restore gemma4:e2b.
             - name: LLM_BACKEND

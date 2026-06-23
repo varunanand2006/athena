@@ -8,7 +8,12 @@ import httpx
 import psycopg2
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+import metrics
+
+# Phase 22: JSON-lines logging on stdout + Prometheus metrics. configure_logging
+# replaces the old basicConfig so the silent-failure sites (empty analysis) emit
+# a greppable warning line naming the field.
+metrics.configure_logging(logging.INFO)
 log = logging.getLogger("leetcode")
 
 LEETCODE_USERNAME = os.environ["LEETCODE_USERNAME"]
@@ -89,32 +94,39 @@ def _chat(prompt: str, max_tokens: int = 200) -> str:
     default, gemma4:e2b when LLM_BACKEND=ollama). Returns the message text, or
     "" if the model returned nothing. Raises on transport errors so the caller
     can skip/retry."""
+    model = OLLAMA_MODEL if LLM_BACKEND == "ollama" else OPENAI_CHAT_MODEL
     with httpx.Client(timeout=120) as client:
         if LLM_BACKEND == "ollama":
+            with metrics.track_llm(model, "analysis"):
+                resp = client.post(
+                    f"{OLLAMA_BASE_URL}/api/chat",
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "think": False,
+                        "stream": False,
+                        "options": {"num_ctx": 2048, "num_predict": max_tokens},
+                    },
+                )
+                resp.raise_for_status()
+            body = resp.json()
+            metrics.record_ollama_usage(model, body)
+            return body.get("message", {}).get("content", "").strip()
+        with metrics.track_llm(model, "analysis"):
             resp = client.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
+                f"{OPENAI_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": OPENAI_CHAT_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
-                    "think": False,
-                    "stream": False,
-                    "options": {"num_ctx": 2048, "num_predict": max_tokens},
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
                 },
             )
             resp.raise_for_status()
-            return resp.json().get("message", {}).get("content", "").strip()
-        resp = client.post(
-            f"{OPENAI_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={
-                "model": OPENAI_CHAT_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-                "max_tokens": max_tokens,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        metrics.record_openai_usage(model, body.get("usage"))
+        return body["choices"][0]["message"]["content"].strip()
 
 
 def _fetch_recent_accepted(limit: int = 20) -> list[dict]:
@@ -234,6 +246,7 @@ def _should_queue(conn, slug: str, submitted_at: datetime) -> bool:
     return last_analyzed is None or submitted_at > last_analyzed
 
 
+@metrics.track_job("leetcode_sync")
 def poll_job() -> None:
     log.info("Poll job starting for user: %s", LEETCODE_USERNAME)
     try:
@@ -307,6 +320,7 @@ def poll_job() -> None:
     log.info("Poll job done — %d/%d queued for analysis", queued, len(submissions))
 
 
+@metrics.track_job("leetcode_analysis")
 def process_job() -> None:
     log.info("Process job starting")
     conn = _db()
@@ -348,7 +362,11 @@ def process_job() -> None:
                 # Empty model output (notably the gemma thinking-model failure
                 # mode): leave the item queued so the next run retries instead of
                 # storing a blank analysis and dropping it from the queue.
-                log.warning("Empty analysis for %s — leaving queued for retry", slug)
+                metrics.job_empty_result("leetcode_analysis")
+                log.warning(
+                    "Empty analysis — leaving queued for retry",
+                    extra={"job": "leetcode_analysis", "field": f"slug={slug}"},
+                )
                 continue
 
             with conn:
@@ -378,6 +396,11 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "backfill":
         backfill_all_topics()
         sys.exit(0)
+
+    # Phase 22: expose /metrics from a daemon-thread listener BEFORE the
+    # run-once-then-schedule handoff, so the first deploy is immediately
+    # scrapeable (this service has no HTTP server of its own).
+    metrics.start_metrics_server()
 
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(poll_job, "interval", hours=6, next_run_time=datetime.now(timezone.utc))

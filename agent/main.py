@@ -22,13 +22,15 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import gmail_client
 import calendar_client
 import memory as memory_vault
+import metrics
 import reflection
 
 # Make application INFO logs visible. Under uvicorn, app loggers default to
 # WARNING (our reflection logger.info lines would be silently dropped), which
-# makes auto-capture impossible to observe. basicConfig adds a root handler at
-# INFO so reflection's lifecycle (capturing N memories / created note …) prints.
-logging.basicConfig(level=logging.INFO)
+# makes auto-capture impossible to observe. Phase 22: configure_logging installs
+# a JSON-lines stdout handler at INFO so reflection's lifecycle prints AND the
+# silent-failure sites are greppable by field.
+metrics.configure_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -81,6 +83,7 @@ _PG_DSN = (
 )
 
 app = FastAPI(title="Athena Agent", lifespan=lifespan)
+metrics.instrument_fastapi(app)  # Phase 22: /metrics + latency middleware
 
 
 def get_llm(mode: str):
@@ -91,6 +94,26 @@ def get_llm(mode: str):
     if LLM_BACKEND == "ollama" and mode == "background":
         return ChatOllama(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL, temperature=0)
     return ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY, temperature=0)
+
+
+def _chat_model_name(mode: str) -> str:
+    """The model label for chat-path metrics, mirroring get_llm's routing."""
+    if LLM_BACKEND == "ollama" and mode == "background":
+        return OLLAMA_MODEL
+    return OPENAI_CHAT_MODEL
+
+
+def _record_agent_usage(model: str, result_messages) -> None:
+    """Sum token usage across the react-agent's response messages and record it.
+    LangChain AIMessages carry ``usage_metadata`` = {input_tokens, output_tokens}.
+    No-op when the provider didn't surface usage (e.g. local Ollama)."""
+    prompt_tokens = completion_tokens = 0
+    for msg in result_messages:
+        usage = getattr(msg, "usage_metadata", None)
+        if usage:
+            prompt_tokens += usage.get("input_tokens", 0) or 0
+            completion_tokens += usage.get("output_tokens", 0) or 0
+    metrics.record_tokens(model, prompt_tokens, completion_tokens)
 
 
 def pg_conn():
@@ -131,21 +154,26 @@ def _embed_text(text: str) -> list[float]:
     1536-dim) by default; flip EMBED_BACKEND=ollama to use local nomic-embed-text
     (768-dim). The two dimensions are incompatible — switching backends requires
     rebuilding the Qdrant collection (ingestion exposes POST /reembed)."""
+    model = EMBED_MODEL if EMBED_BACKEND == "ollama" else OPENAI_EMBED_MODEL
     with httpx.Client(timeout=30) as client:
         if EMBED_BACKEND == "ollama":
+            with metrics.track_llm(model, "embed"):
+                resp = client.post(
+                    f"{OLLAMA_BASE_URL}/api/embeddings",
+                    json={"model": EMBED_MODEL, "prompt": text},
+                )
+                resp.raise_for_status()
+            return resp.json()["embedding"]
+        with metrics.track_llm(model, "embed"):
             resp = client.post(
-                f"{OLLAMA_BASE_URL}/api/embeddings",
-                json={"model": EMBED_MODEL, "prompt": text},
+                f"{OPENAI_BASE_URL}/embeddings",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                json={"model": OPENAI_EMBED_MODEL, "input": text},
             )
             resp.raise_for_status()
-            return resp.json()["embedding"]
-        resp = client.post(
-            f"{OPENAI_BASE_URL}/embeddings",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": OPENAI_EMBED_MODEL, "input": text},
-        )
-        resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
+        body = resp.json()
+        metrics.record_openai_usage(model, body.get("usage"))
+        return body["data"][0]["embedding"]
 
 
 def _find_documents_impl(query: str) -> list[dict]:
@@ -157,6 +185,10 @@ def _find_documents_impl(query: str) -> list[dict]:
         )
         search_resp.raise_for_status()
         hits = search_resp.json().get("result", [])
+
+    # Phase 22: RAG retrieval-quality smoke signal — count the lookup and flag
+    # it empty when nothing came back (the "find_documents returned nothing" case).
+    metrics.record_rag_lookup(len(hits))
 
     results = []
     for hit in hits:
@@ -1000,10 +1032,13 @@ async def chat(req: ChatRequest):
         prompt = _build_chat_system_prompt() if req.mode == "chat" else SYSTEM_PROMPT
         agent = create_react_agent(llm, tools=CHAT_TOOLS, prompt=prompt)
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            _executor,
-            lambda: agent.invoke({"messages": messages}),
-        )
+        model_name = _chat_model_name(req.mode)
+        with metrics.track_llm(model_name, "chat"):
+            result = await loop.run_in_executor(
+                _executor,
+                lambda: agent.invoke({"messages": messages}),
+            )
+        _record_agent_usage(model_name, result["messages"])
         last = result["messages"][-1]
         response_text = last.content
 

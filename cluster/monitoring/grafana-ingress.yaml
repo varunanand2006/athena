@@ -1,0 +1,23 @@
+# Grafana is the only user-facing piece. Exposed at grafana.local via Traefik
+# (same entrypoint as athena.local). Point grafana.local → 192.168.96.200 (the
+# control-plane node where Traefik runs) in DNS / your hosts file.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: grafana.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 80

@@ -1,0 +1,16 @@
+# Phase 22: TSDB storage. local-path (k3s) binds the PV to whichever node first
+# schedules a pod that mounts it — the prometheus Deployment pins to vlinux2 via
+# nodeSelector so PV and pod co-locate (the storage-pinning lesson). ~15d
+# retention at this cardinality is a few hundred MB.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
