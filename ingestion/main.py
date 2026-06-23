@@ -32,7 +32,23 @@ DOCS_DIR = Path(os.getenv("INGESTION_DOCS_DIR", "/data/documents"))
 TOC_FILENAME = "_TABLE_OF_CONTENTS.md"
 WATCH_INTERVAL_MINUTES = int(os.getenv("INGESTION_WATCH_INTERVAL_MINUTES", "5"))
 COLLECTION = "documents"
-EMBED_DIM = 768
+
+# Backend toggle (see agent/main.py). "openai" (default) routes summary
+# generation to gpt-4o-mini and embeddings to text-embedding-3-small; "ollama"
+# restores the original local Gemma / nomic-embed-text path. Gemma was retired
+# for being too slow on CPU. Flip the env (no rebuild) to revert.
+LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")        # openai | ollama
+EMBED_BACKEND = os.getenv("EMBED_BACKEND", "openai")    # openai | ollama
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+# Vector dimension follows the embed backend: text-embedding-3-small is 1536,
+# nomic-embed-text is 768. The dimensions are incompatible, so switching backends
+# means recreating the collection (handled in _ensure_collection) and rebuilding
+# every point from cached summaries (POST /reembed).
+EMBED_DIM = int(os.getenv("EMBED_DIM", "1536" if EMBED_BACKEND == "openai" else "768"))
 
 log = logging.getLogger("ingestion")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -81,6 +97,17 @@ def _mark_complete(document_id: str) -> None:
 qdrant = QdrantClient(url=QDRANT_URL)
 
 
+def _recreate_collection() -> None:
+    """Drop and recreate the documents collection at the active EMBED_DIM.
+    Safe because the vectors are derived data — every point is rebuildable from
+    the cached `summary` column via _reembed()."""
+    qdrant.delete_collection(collection_name=COLLECTION)
+    qdrant.create_collection(
+        collection_name=COLLECTION,
+        vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+    )
+
+
 def _ensure_collection() -> None:
     existing = {c.name for c in qdrant.get_collections().collections}
     if COLLECTION not in existing:
@@ -88,6 +115,20 @@ def _ensure_collection() -> None:
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
         )
+        return
+    # Collection exists — make sure its vector size matches the active embed
+    # backend. After an EMBED_BACKEND switch (e.g. nomic 768 -> OpenAI 1536) the
+    # old collection is the wrong width and every upsert would fail; recreate it
+    # empty and surface that the points must be rebuilt via POST /reembed.
+    info = qdrant.get_collection(COLLECTION)
+    current_dim = info.config.params.vectors.size
+    if current_dim != EMBED_DIM:
+        log.warning(
+            "documents collection is %d-dim but embed backend '%s' needs %d-dim — "
+            "recreating empty; POST /reembed to repopulate from cached summaries",
+            current_dim, EMBED_BACKEND, EMBED_DIM,
+        )
+        _recreate_collection()
 
 
 def _reap_stuck_documents() -> None:
@@ -157,12 +198,20 @@ app = FastAPI(title="Athena Ingestion", lifespan=lifespan)
 
 def _embed(text: str) -> list[float]:
     with httpx.Client(timeout=60) as client:
+        if EMBED_BACKEND == "ollama":
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/embeddings",
+                json={"model": EMBED_MODEL, "prompt": text},
+            )
+            resp.raise_for_status()
+            return resp.json()["embedding"]
         resp = client.post(
-            f"{OLLAMA_BASE_URL}/api/embeddings",
-            json={"model": EMBED_MODEL, "prompt": text},
+            f"{OPENAI_BASE_URL}/embeddings",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": OPENAI_EMBED_MODEL, "input": text},
         )
         resp.raise_for_status()
-        return resp.json()["embedding"]
+        return resp.json()["data"][0]["embedding"]
 
 
 SUMMARY_PROMPT = """Summarize what this document is in 2-3 sentences. Be specific about its contents and purpose. Do not say "I" or explain yourself.
@@ -173,21 +222,33 @@ Document:
 
 def _generate_summary(text: str) -> str:
     snippet = text[:2000]
+    prompt = SUMMARY_PROMPT.format(text=snippet)
     with httpx.Client(timeout=90) as client:
+        if LLM_BACKEND == "ollama":
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "think": False,
+                    "stream": False,
+                    "options": {"num_ctx": 2048, "num_predict": 150},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "").strip()
         resp = client.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
+            f"{OPENAI_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
             json={
-                "model": OLLAMA_MODEL,
-                "messages": [
-                    {"role": "user", "content": SUMMARY_PROMPT.format(text=snippet)}
-                ],
-                "think": False,
-                "stream": False,
-                "options": {"num_ctx": 2048, "num_predict": 150},
+                "model": OPENAI_CHAT_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": 200,
             },
         )
         resp.raise_for_status()
-        return resp.json().get("message", {}).get("content", "").strip()
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
 
 class IngestResponse(BaseModel):
@@ -500,6 +561,60 @@ def delete_document(document_id: str) -> dict:
         pass
 
     return {"deleted": document_id}
+
+
+@app.post("/reembed")
+def reembed() -> dict:
+    """Rebuild the entire Qdrant collection from cached summaries using the
+    ACTIVE embed backend.
+
+    Run this once after switching EMBED_BACKEND — the vector dimension changes
+    (nomic 768 <-> OpenAI 1536), so the collection is recreated and every point
+    re-embedded. Cheap relative to a full re-ingest: it reuses the `summary`
+    already cached on each catalog row (no text extraction, no re-summarization).
+    Idempotent — safe to re-run.
+    """
+    _recreate_collection()
+    conn = pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, summary FROM documents "
+                "WHERE status = 'complete' AND summary IS NOT NULL AND summary <> ''"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    done, failed = 0, 0
+    for doc_id, title, summary in rows:
+        try:
+            vector = _embed(summary)
+            qdrant.upsert(
+                collection_name=COLLECTION,
+                points=[PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vector,
+                    payload={
+                        "document_id": str(doc_id),
+                        "title": title,
+                        "summary": summary,
+                    },
+                )],
+            )
+            done += 1
+        except Exception:
+            log.exception("reembed failed for document %s", doc_id)
+            failed += 1
+
+    log.info("reembed complete — %d rebuilt, %d failed (dim=%d, backend=%s)",
+             done, failed, EMBED_DIM, EMBED_BACKEND)
+    return {
+        "reembedded": done,
+        "failed": failed,
+        "dim": EMBED_DIM,
+        "embed_backend": EMBED_BACKEND,
+    }
 
 
 @app.get("/healthz")

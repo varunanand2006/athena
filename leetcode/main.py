@@ -12,6 +12,14 @@ log = logging.getLogger("leetcode")
 LEETCODE_USERNAME = os.environ["LEETCODE_USERNAME"]
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+
+# Backend toggle (see agent/main.py). "openai" (default) sends problem analysis
+# to gpt-4o-mini; "ollama" restores the original gemma4:e2b path. Gemma was
+# retired for being too slow on CPU. Flip the env (no rebuild) to revert.
+LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")        # openai | ollama
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "athena")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "athena")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "athena")
@@ -43,6 +51,7 @@ QUESTION_QUERY = """
 query questionData($titleSlug: String!) {
   question(titleSlug: $titleSlug) {
     difficulty
+    topicTags { name }
   }
 }
 """
@@ -50,6 +59,39 @@ query questionData($titleSlug: String!) {
 
 def _db():
     return psycopg2.connect(PG_DSN)
+
+
+def _chat(prompt: str, max_tokens: int = 200) -> str:
+    """Single-turn chat completion via the active backend (gpt-4o-mini by
+    default, gemma4:e2b when LLM_BACKEND=ollama). Returns the message text, or
+    "" if the model returned nothing. Raises on transport errors so the caller
+    can skip/retry."""
+    with httpx.Client(timeout=120) as client:
+        if LLM_BACKEND == "ollama":
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "think": False,
+                    "stream": False,
+                    "options": {"num_ctx": 2048, "num_predict": max_tokens},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "").strip()
+        resp = client.post(
+            f"{OPENAI_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": OPENAI_CHAT_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": max_tokens,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
 
 def _fetch_recent_accepted(limit: int = 20) -> list[dict]:
@@ -65,14 +107,20 @@ def _fetch_recent_accepted(limit: int = 20) -> list[dict]:
     return resp.json().get("data", {}).get("recentAcSubmissionList") or []
 
 
-def _fetch_difficulty(slug: str) -> str:
+def _fetch_question_meta(slug: str) -> tuple[str, list[str]]:
+    """Fetch a problem's difficulty and topic tags from LeetCode's GraphQL API.
+    Topic tags are first-class metadata (e.g. "Dynamic Programming", "Hash
+    Table") — no LLM needed. Returns (difficulty, topics)."""
     with httpx.Client(timeout=20, headers=GRAPHQL_HEADERS) as client:
         resp = client.post(
             GRAPHQL_URL,
             json={"query": QUESTION_QUERY, "variables": {"titleSlug": slug}},
         )
         resp.raise_for_status()
-    return resp.json().get("data", {}).get("question", {}).get("difficulty", "Unknown")
+    question = resp.json().get("data", {}).get("question") or {}
+    difficulty = question.get("difficulty", "Unknown")
+    topics = [t["name"] for t in (question.get("topicTags") or []) if t.get("name")]
+    return difficulty, topics
 
 
 def _should_queue(conn, slug: str, submitted_at: datetime) -> bool:
@@ -108,22 +156,23 @@ def poll_job() -> None:
             submitted_at = datetime.fromtimestamp(int(sub["timestamp"]), tz=timezone.utc)
 
             try:
-                difficulty = _fetch_difficulty(slug)
+                difficulty, topics = _fetch_question_meta(slug)
             except Exception as exc:
-                log.warning("Could not fetch difficulty for %s: %s", slug, exc)
-                difficulty = "Unknown"
+                log.warning("Could not fetch metadata for %s: %s", slug, exc)
+                difficulty, topics = "Unknown", []
 
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        INSERT INTO leetcode_problems (title, slug, difficulty, solved_at)
-                        VALUES (%s, %s, %s, %s)
+                        INSERT INTO leetcode_problems (title, slug, difficulty, topics, solved_at)
+                        VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (slug) DO UPDATE
                           SET solved_at   = EXCLUDED.solved_at,
-                              difficulty  = EXCLUDED.difficulty
+                              difficulty  = EXCLUDED.difficulty,
+                              topics      = EXCLUDED.topics
                         """,
-                        (title, slug, difficulty, submitted_at),
+                        (title, slug, difficulty, topics, submitted_at),
                     )
                     cur.execute(
                         """
@@ -190,26 +239,14 @@ def process_job() -> None:
             )
 
             try:
-                with httpx.Client(timeout=120) as client:
-                    resp = client.post(
-                        f"{OLLAMA_BASE_URL}/api/chat",
-                        json={
-                            "model": OLLAMA_MODEL,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "think": False,
-                            "stream": False,
-                            "options": {"num_ctx": 2048, "num_predict": 200},
-                        },
-                    )
-                    resp.raise_for_status()
-                analysis = resp.json().get("message", {}).get("content", "").strip()
+                analysis = _chat(prompt, max_tokens=200)
             except Exception as exc:
-                log.error("Ollama request failed for %s: %s", slug, exc)
+                log.error("LLM request failed for %s: %s", slug, exc)
                 continue
 
             if not analysis:
-                # Empty model output (the gemma thinking-model failure mode):
-                # leave the item queued so the next run retries instead of
+                # Empty model output (notably the gemma thinking-model failure
+                # mode): leave the item queued so the next run retries instead of
                 # storing a blank analysis and dropping it from the queue.
                 log.warning("Empty analysis for %s — leaving queued for retry", slug)
                 continue
@@ -238,6 +275,11 @@ def process_job() -> None:
 if __name__ == "__main__":
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(poll_job, "interval", hours=6, next_run_time=datetime.now(timezone.utc))
-    scheduler.add_job(process_job, "cron", hour=23, minute=0)
-    log.info("Scheduler started — user=%s model=%s", LEETCODE_USERNAME, OLLAMA_MODEL)
+    # LLM analysis (process_job) is DISABLED — we only populate factual problem
+    # data: difficulty + topic tags straight from LeetCode's API, no paid LLM
+    # calls. The process_job/_chat code (and the queue poll_job fills) are kept
+    # intact; re-add the line below to turn analysis back on.
+    # scheduler.add_job(process_job, "cron", hour=23, minute=0)
+    log.info("Scheduler started — user=%s (LLM analysis OFF; polling problems + topics only)",
+             LEETCODE_USERNAME)
     scheduler.start()

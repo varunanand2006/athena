@@ -24,7 +24,7 @@ spec:
             claimName: agent-memory
       containers:
         - name: agent
-          image: athena-agent:20260623
+          image: athena-agent:20260623-openai
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -33,6 +33,19 @@ spec:
             - name: memory
               mountPath: /data/memory
           env:
+            # Backend toggle — Gemma (gemma4:e2b on CPU) was retired for latency.
+            # "openai" routes the background chat mode + reflection sweeps to
+            # gpt-4o-mini and RAG embeddings to text-embedding-3-small. Flip both
+            # back to "ollama" (and run the ingestion /reembed) to restore Gemma.
+            - name: LLM_BACKEND
+              value: "openai"
+            - name: EMBED_BACKEND
+              value: "openai"
+            - name: OPENAI_CHAT_MODEL
+              value: "gpt-4o-mini"
+            - name: OPENAI_EMBED_MODEL
+              value: "text-embedding-3-small"
+            # Kept for the LLM_BACKEND=ollama revert path (unused while openai).
             - name: OLLAMA_BASE_URL
               value: "http://ollama.athena.svc.cluster.local:11434"
             - name: SEARXNG_BASE_URL

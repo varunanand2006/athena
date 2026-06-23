@@ -4,7 +4,10 @@ metadata:
   name: internship-hunter
   namespace: athena
 spec:
-  replicas: 1
+  # Scaled to 0 — not in use. Turned off after the OpenAI migration so the daily
+  # listing pull + per-posting LLM scoring (now paid gpt-4o-mini) don't run while
+  # unused. Manifest kept; set replicas back to 1 and re-apply to resume.
+  replicas: 0
   selector:
     matchLabels:
       app: internship-hunter
@@ -18,9 +21,22 @@ spec:
       enableServiceLinks: false
       containers:
         - name: internship-hunter
-          image: athena-internship:20260623
+          image: athena-internship:20260623-openai
           imagePullPolicy: Never
           env:
+            # Backend toggle — Gemma retired for latency. "openai" routes company
+            # research + posting scoring to gpt-4o-mini; flip to "ollama" to
+            # restore gemma4:e2b.
+            - name: LLM_BACKEND
+              value: "openai"
+            - name: OPENAI_CHAT_MODEL
+              value: "gpt-4o-mini"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-secret
+                  key: OPENAI_API_KEY
+            # Kept for the LLM_BACKEND=ollama revert path.
             - name: OLLAMA_URL
               value: "http://ollama.athena.svc.cluster.local:11434"
             - name: OLLAMA_MODEL

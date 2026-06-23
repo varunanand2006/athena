@@ -13,7 +13,7 @@ If you're unsure whether something is a planning question or an implementation q
 
 ## Repo structure
 - `cluster/` — Kubernetes manifests (k3s, Traefik, node configs)
-- `agent/` — LangGraph orchestration service (Python); interactive chat uses GPT-4o-mini, background tasks use gemma4:e2b
+- `agent/` — LangGraph orchestration service (Python); all chat + background reflection use GPT-4o-mini (Gemma retired for latency — see the `LLM_BACKEND`/`EMBED_BACKEND` toggle below)
 - `mcp-server/` — Rust MCP server (thin proxy, LAN-only; Phase 13 added bearer-token auth)
 - `ingestion/` — Document ingestion pipelines (LlamaIndex, Python)
 - `internship/` — Internship hunter service (APScheduler, daily pipeline)
@@ -32,8 +32,10 @@ If you're unsure whether something is a planning question or an implementation q
 
 ## Tech stack
 - **k3s** with Traefik ingress, Flannel networking
-- **Ollama** running Gemma 4 (local inference, CPU only — expect slow responses)
-  - Current model: `gemma4:e2b` (5.12B params, Q4_K_M, 7.2GB). Swap to `gemma4:12b` for real workloads.
+- **OpenAI** is the active LLM + embedding backend (`gpt-4o-mini` for chat/summaries/reflection, `text-embedding-3-small` for RAG). Gemma was too slow on CPU for the workload and was retired.
+  - **Backend toggle** — every LLM/embedding-calling service (`agent`, `ingestion`, `internship`, `leetcode`) reads `LLM_BACKEND` (and `ingestion`/`agent` also `EMBED_BACKEND`), default `openai`. Set to `ollama` to restore the local path. The Ollama/Gemma code is intact behind the toggle — revert is config-only (+ re-run ingestion `POST /reembed`, because the embedding dimension differs: OpenAI 1536 vs nomic 768).
+- **Ollama** running Gemma 4 — **scaled to 0** (`cluster/ollama/deployment.yaml replicas: 0`). Manifests + PVC kept for the revert path.
+  - Retired model: `gemma4:e2b` (5.12B params, Q4_K_M, 7.2GB). Also served `nomic-embed-text` (768-dim) for embeddings.
 - **LangGraph** for agent orchestration
 - **LlamaIndex** for document parsing and ingestion
 - **Qdrant** for vector search (summary-level, one vector per document)

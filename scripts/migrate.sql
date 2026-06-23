@@ -36,8 +36,12 @@ CREATE TABLE IF NOT EXISTS leetcode_problems (
     title       TEXT        NOT NULL,
     slug        TEXT        NOT NULL UNIQUE,
     difficulty  TEXT        NOT NULL,
+    topics      TEXT[]      NOT NULL DEFAULT '{}',
     solved_at   TIMESTAMPTZ NOT NULL
 );
+-- Topic tags pulled from LeetCode's GraphQL API (no LLM). Additive column for
+-- DBs created before topics were captured; idempotent, safe to re-run.
+ALTER TABLE leetcode_problems ADD COLUMN IF NOT EXISTS topics TEXT[] NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS leetcode_submissions (
     id          BIGINT      PRIMARY KEY,

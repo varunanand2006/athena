@@ -18,11 +18,23 @@ spec:
       enableServiceLinks: false
       containers:
         - name: leetcode
-          image: athena-leetcode:20260623
+          image: athena-leetcode:20260623-openai
           imagePullPolicy: Never
           env:
             - name: LEETCODE_USERNAME
               value: "varunanand2006"
+            # Backend toggle — Gemma retired for latency. "openai" sends problem
+            # analysis to gpt-4o-mini; flip to "ollama" to restore gemma4:e2b.
+            - name: LLM_BACKEND
+              value: "openai"
+            - name: OPENAI_CHAT_MODEL
+              value: "gpt-4o-mini"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-secret
+                  key: OPENAI_API_KEY
+            # Kept for the LLM_BACKEND=ollama revert path.
             - name: OLLAMA_BASE_URL
               value: "http://ollama.athena.svc.cluster.local:11434"
             - name: OLLAMA_MODEL

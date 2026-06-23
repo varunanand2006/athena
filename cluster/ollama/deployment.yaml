@@ -4,7 +4,12 @@ metadata:
   name: ollama
   namespace: athena
 spec:
-  replicas: 1
+  # Scaled to 0: Gemma (gemma4:e2b) was too slow on CPU for the workload, so all
+  # LLM + embedding traffic moved to OpenAI (LLM_BACKEND/EMBED_BACKEND=openai on
+  # the agent/ingestion/leetcode/internship deployments). This manifest, the PVC,
+  # and the pulled models are KEPT so reverting is just: set replicas back to 1,
+  # flip those env vars to "ollama", and re-run the ingestion POST /reembed.
+  replicas: 0
   selector:
     matchLabels:
       app: ollama

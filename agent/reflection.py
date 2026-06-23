@@ -31,11 +31,35 @@ import os
 import psycopg2
 from datetime import date, datetime, timedelta, timezone
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama.athena.svc.cluster.local:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+
+# Backend toggle (see agent/main.py). Reflection's prompts already demand a clean
+# JSON array, which gpt-4o-mini produces far more reliably than gemma4:e2b — and
+# faster. "openai" (default) routes all reflection LLM calls to gpt-4o-mini;
+# "ollama" restores the original local Gemma path. NOTE: the foreground-only
+# safety boundary is unchanged — these background sweeps still NEVER pass
+# replace/replace_events regardless of which model answers.
+LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")        # openai | ollama
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+
+
+def _reflection_llm():
+    """The LLM used for every background reflection/sweep. gpt-4o-mini by
+    default (Gemma was retired for being too slow on CPU); flip LLM_BACKEND=ollama
+    to restore gemma4:e2b. The Ollama-only num_ctx/num_predict tuning is dropped
+    on the OpenAI path (not applicable) — temperature=0 is the shared knob."""
+    if LLM_BACKEND == "ollama":
+        return ChatOllama(
+            base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL,
+            temperature=0, num_ctx=4096, num_predict=512,
+        )
+    return ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY, temperature=0)
 
 # --- Phase 21: external-source sweep config --------------------------------
 # Calendar: how far forward to sweep, and a min interval between sweeps so the
@@ -238,13 +262,7 @@ def reflect_on_conversation(conversation_id: str, title: str = "") -> bool:
         # conversation + memory index) and output budget (avoid truncating the
         # JSON, which would fail the parse and silently capture nothing).
         prompt = _reflection_prompt(messages, memory_index)
-        llm = ChatOllama(
-            base_url=OLLAMA_BASE_URL,
-            model=OLLAMA_MODEL,
-            temperature=0,
-            num_ctx=4096,
-            num_predict=512,
-        )
+        llm = _reflection_llm()
         result = llm.invoke(prompt)
         response_text = result.content
 
@@ -524,10 +542,7 @@ def reflect_on_calendar() -> bool:
 
     memory_index = _get_memory_index()
     prompt = _calendar_reflection_prompt(events, memory_index)
-    llm = ChatOllama(
-        base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL,
-        temperature=0, num_ctx=4096, num_predict=512,
-    )
+    llm = _reflection_llm()
     try:
         result = llm.invoke(prompt)
         decisions = _parse_reflection_response(result.content)
@@ -693,10 +708,7 @@ def reflect_on_labeled_email() -> bool:
 
     memory_index = _get_memory_index()
     prompt = _email_reflection_prompt(enriched, memory_index)
-    llm = ChatOllama(
-        base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL,
-        temperature=0, num_ctx=4096, num_predict=512,
-    )
+    llm = _reflection_llm()
     try:
         result = llm.invoke(prompt)
         decisions = _parse_reflection_response(result.content)

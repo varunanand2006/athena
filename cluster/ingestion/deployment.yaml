@@ -22,7 +22,7 @@ spec:
             claimName: ingestion-documents
       containers:
         - name: ingestion
-          image: athena-ingestion:20260623
+          image: athena-ingestion:20260623-openai
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -31,6 +31,26 @@ spec:
             - name: documents
               mountPath: /data/documents
           env:
+            # Backend toggle — Gemma was retired for latency. "openai" routes
+            # summaries to gpt-4o-mini and embeddings to text-embedding-3-small
+            # (1536-dim). Switching EMBED_BACKEND changes the vector dimension, so
+            # after deploy run: kubectl exec/curl POST /reembed once to rebuild the
+            # Qdrant collection from cached summaries. Flip back to "ollama" +
+            # /reembed to restore nomic-embed-text (768-dim).
+            - name: LLM_BACKEND
+              value: "openai"
+            - name: EMBED_BACKEND
+              value: "openai"
+            - name: OPENAI_CHAT_MODEL
+              value: "gpt-4o-mini"
+            - name: OPENAI_EMBED_MODEL
+              value: "text-embedding-3-small"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-secret
+                  key: OPENAI_API_KEY
+            # Kept for the EMBED_BACKEND/LLM_BACKEND=ollama revert path.
             - name: OLLAMA_BASE_URL
               value: "http://ollama.athena.svc.cluster.local:11434"
             - name: QDRANT_URL

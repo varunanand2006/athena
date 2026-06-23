@@ -21,6 +21,40 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama.athena.svc.cluster.local:114
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng.athena.svc.cluster.local")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
 
+# Backend toggle (see agent/main.py). "openai" (default) routes company research
+# and posting scoring to gpt-4o-mini; "ollama" restores the original gemma4:e2b
+# path. Gemma was retired for being too slow on CPU. Flip the env (no rebuild).
+LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")        # openai | ollama
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+
+def _chat(prompt: str, max_tokens: int = 150) -> str:
+    """Single-turn chat completion via the active backend (gpt-4o-mini by
+    default, gemma4:e2b when LLM_BACKEND=ollama). Returns the message text.
+    Raises on transport errors so callers keep their existing fallbacks."""
+    with httpx.Client(timeout=90) as client:
+        if LLM_BACKEND == "ollama":
+            resp = client.post(
+                f"{OLLAMA_URL}/api/chat",
+                json={"model": OLLAMA_MODEL, "think": False,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "stream": False,
+                      "options": {"num_ctx": 2048, "num_predict": max_tokens}},
+            )
+            resp.raise_for_status()
+            return resp.json()["message"]["content"].strip()
+        resp = client.post(
+            f"{OPENAI_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": OPENAI_CHAT_MODEL,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0, "max_tokens": max_tokens},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
 GITHUB_SOURCES = [
     "vanshb03/Summer2027-Internships",
     "SimplifyJobs/New-Grad-Positions",
@@ -179,18 +213,9 @@ def research_company(company: str) -> str:
     )
 
     try:
-        with httpx.Client(timeout=90) as client:
-            resp = client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={"model": OLLAMA_MODEL, "think": False,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "stream": False,
-                      "options": {"num_ctx": 2048, "num_predict": 150}},
-            )
-            resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
+        return _chat(prompt, max_tokens=150)
     except Exception as e:
-        log.warning("Ollama company research failed for %s: %s", company, e)
+        log.warning("LLM company research failed for %s: %s", company, e)
         return f"{company} is a technology company."
 
 
@@ -216,16 +241,7 @@ def score_posting(company: str, role: str, location: str, company_summary: str) 
     )
 
     try:
-        with httpx.Client(timeout=90) as client:
-            resp = client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={"model": OLLAMA_MODEL, "think": False,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "stream": False,
-                      "options": {"num_ctx": 2048, "num_predict": 150}},
-            )
-            resp.raise_for_status()
-            text = resp.json()["message"]["content"].strip()
+        text = _chat(prompt, max_tokens=150)
 
         score, resume = 5, "General SWE"
         for line in text.splitlines():
@@ -245,7 +261,7 @@ def score_posting(company: str, role: str, location: str, company_summary: str) 
 
         return score, resume
     except Exception as e:
-        log.warning("Ollama scoring failed for %s/%s: %s", company, role, e)
+        log.warning("LLM scoring failed for %s/%s: %s", company, role, e)
         return 5, "General SWE"
 
 

@@ -60,6 +60,16 @@ INGESTION_URL = os.getenv("INGESTION_URL", "http://ingestion.athena.svc.cluster.
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+# Backend toggles (added when Gemma was retired for latency — gemma4:e2b on CPU
+# was too slow for the workload). "openai" routes LLM + embeddings to the hosted
+# OpenAI models; "ollama" restores the original local Gemma / nomic path. Kept as
+# a flip-the-env revert (the Ollama code below is intact) rather than a delete.
+LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")        # openai | ollama
+EMBED_BACKEND = os.getenv("EMBED_BACKEND", "openai")    # openai | ollama
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://mcp-server.athena.svc.cluster.local")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://frontend.athena.svc.cluster.local")
 
@@ -74,9 +84,13 @@ app = FastAPI(title="Athena Agent", lifespan=lifespan)
 
 
 def get_llm(mode: str):
-    if mode == "background":
+    # Only the local-Ollama backend still distinguishes background (Gemma) from
+    # chat (OpenAI). With the default openai backend BOTH modes use gpt-4o-mini —
+    # Gemma was retired for being too slow on CPU. Flip LLM_BACKEND=ollama to
+    # restore the original split.
+    if LLM_BACKEND == "ollama" and mode == "background":
         return ChatOllama(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL, temperature=0)
-    return ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0)
+    return ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY, temperature=0)
 
 
 def pg_conn():
@@ -112,15 +126,31 @@ def web_search(query: str) -> str:
 # (which return JSON for the MCP server / other direct callers).
 
 
-def _find_documents_impl(query: str) -> list[dict]:
+def _embed_text(text: str) -> list[float]:
+    """Embed one string with the active backend. OpenAI (text-embedding-3-small,
+    1536-dim) by default; flip EMBED_BACKEND=ollama to use local nomic-embed-text
+    (768-dim). The two dimensions are incompatible — switching backends requires
+    rebuilding the Qdrant collection (ingestion exposes POST /reembed)."""
     with httpx.Client(timeout=30) as client:
-        embed_resp = client.post(
-            f"{OLLAMA_BASE_URL}/api/embeddings",
-            json={"model": EMBED_MODEL, "prompt": query},
+        if EMBED_BACKEND == "ollama":
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/embeddings",
+                json={"model": EMBED_MODEL, "prompt": text},
+            )
+            resp.raise_for_status()
+            return resp.json()["embedding"]
+        resp = client.post(
+            f"{OPENAI_BASE_URL}/embeddings",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": OPENAI_EMBED_MODEL, "input": text},
         )
-        embed_resp.raise_for_status()
-        vector = embed_resp.json()["embedding"]
+        resp.raise_for_status()
+        return resp.json()["data"][0]["embedding"]
 
+
+def _find_documents_impl(query: str) -> list[dict]:
+    vector = _embed_text(query)
+    with httpx.Client(timeout=30) as client:
         search_resp = client.post(
             f"{QDRANT_URL}/collections/documents/points/search",
             json={"vector": vector, "limit": 3, "with_payload": True},
@@ -1345,10 +1375,15 @@ SYSTEM_HEALTH_CHECKS = [
     ("frontend",  f"{FRONTEND_URL}/"),
     ("ingestion", f"{INGESTION_URL}/healthz"),
     ("mcp-server",f"{MCP_SERVER_URL}/healthz"),
-    ("ollama",    f"{OLLAMA_BASE_URL}/api/tags"),
     ("qdrant",    f"{QDRANT_URL}/healthz"),
     ("searxng",   f"{SEARXNG_BASE_URL}/healthz"),
 ]
+# Only health-check Ollama when a backend actually uses it. Gemma was retired and
+# the pod scaled to 0, so checking it under the default openai backend would show
+# a permanently-red dot for a service we intentionally turned off. Flipping either
+# backend back to "ollama" restores the check.
+if LLM_BACKEND == "ollama" or EMBED_BACKEND == "ollama":
+    SYSTEM_HEALTH_CHECKS.append(("ollama", f"{OLLAMA_BASE_URL}/api/tags"))
 
 
 async def _ping_service(client: httpx.AsyncClient, name: str, url: str) -> dict:
