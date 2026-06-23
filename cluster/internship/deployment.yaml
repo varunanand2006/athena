@@ -18,7 +18,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: internship-hunter
-          image: athena-internship:latest
+          image: athena-internship:20260623
           imagePullPolicy: Never
           env:
             - name: OLLAMA_URL

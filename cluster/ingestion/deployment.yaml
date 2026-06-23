@@ -22,7 +22,7 @@ spec:
             claimName: ingestion-documents
       containers:
         - name: ingestion
-          image: athena-ingestion:latest
+          image: athena-ingestion:20260623
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

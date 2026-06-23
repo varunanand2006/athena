@@ -18,7 +18,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: leetcode
-          image: athena-leetcode:latest
+          image: athena-leetcode:20260623
           imagePullPolicy: Never
           env:
             - name: LEETCODE_USERNAME
