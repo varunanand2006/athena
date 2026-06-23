@@ -180,9 +180,13 @@ const CHART_DATA_TEMPLATE = [
 // Palette for topic pie slices; cycles if there are more slices than colors.
 const TOPIC_COLORS = [
   '#6366F1', '#0EA5E9', '#10B981', '#F59E0B', '#EF4444',
-  '#8B5CF6', '#EC4899', '#14B8A6',
+  '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#3B82F6',
+  '#A3E635', '#E11D48',
 ]
 const OTHER_COLOR = '#CBD5E1'
+
+// How many topics get their own slice before the long tail folds into "Other".
+const MAX_TOPIC_SLICES = 12
 
 type LeetView = 'topics' | 'difficulty' | 'recent'
 
@@ -199,7 +203,7 @@ function difficultyColor(d: string): string {
 }
 
 // Top N topics as individual slices; the long tail folds into a single "Other".
-function buildTopicPie(topics: TopicCount[], maxSlices = 8): PieSlice[] {
+function buildTopicPie(topics: TopicCount[], maxSlices = MAX_TOPIC_SLICES): PieSlice[] {
   const head = topics.slice(0, maxSlices).map((t, i) => ({
     ...t,
     color: TOPIC_COLORS[i % TOPIC_COLORS.length],
