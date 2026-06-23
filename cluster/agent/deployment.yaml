@@ -24,7 +24,7 @@ spec:
             claimName: agent-memory
       containers:
         - name: agent
-          image: athena-agent:20260623-openai
+          image: athena-agent:20260623-leetcode
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

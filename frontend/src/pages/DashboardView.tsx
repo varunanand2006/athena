@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
+  PieChart, Pie, Sector,
+} from 'recharts'
 
 // ---- Types ----------------------------------------------------------------
 
@@ -15,12 +18,27 @@ interface Internship {
   found_date: string
 }
 
+interface TopicCount {
+  topic: string
+  count: number
+}
+
+interface RecentProblem {
+  title: string
+  slug: string
+  difficulty: string
+  topics: string[]
+  solved_at: string | null
+}
+
 interface LeetCodeStats {
   total: number
   easy: number
   medium: number
   hard: number
   last_solved_date: string | null
+  topics: TopicCount[]
+  recent: RecentProblem[]
 }
 
 // ---- Shared card shell ----------------------------------------------------
@@ -159,10 +177,91 @@ const CHART_DATA_TEMPLATE = [
   { name: 'Hard',   key: 'hard'   as const, color: '#DC2626' },
 ]
 
+// Palette for topic pie slices; cycles if there are more slices than colors.
+const TOPIC_COLORS = [
+  '#6366F1', '#0EA5E9', '#10B981', '#F59E0B', '#EF4444',
+  '#8B5CF6', '#EC4899', '#14B8A6',
+]
+const OTHER_COLOR = '#CBD5E1'
+
+type LeetView = 'topics' | 'difficulty' | 'recent'
+
+interface PieSlice extends TopicCount {
+  color: string
+}
+
+function difficultyColor(d: string): string {
+  const k = d.toLowerCase()
+  if (k === 'easy') return '#16A34A'
+  if (k === 'medium') return '#D97706'
+  if (k === 'hard') return '#DC2626'
+  return 'var(--text-muted)'
+}
+
+// Top N topics as individual slices; the long tail folds into a single "Other".
+function buildTopicPie(topics: TopicCount[], maxSlices = 8): PieSlice[] {
+  const head = topics.slice(0, maxSlices).map((t, i) => ({
+    ...t,
+    color: TOPIC_COLORS[i % TOPIC_COLORS.length],
+  }))
+  const tail = topics.slice(maxSlices)
+  if (tail.length > 0) {
+    head.push({
+      topic: `Other (${tail.length})`,
+      count: tail.reduce((sum, t) => sum + t.count, 0),
+      color: OTHER_COLOR,
+    })
+  }
+  return head
+}
+
+// Active pie slice: pull it out slightly and label the donut centre with the
+// selected topic + its count and share.
+function renderActiveTopic(props: any) {
+  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill, payload, percent } = props
+  return (
+    <g>
+      <text x={cx} y={cy - 6} textAnchor="middle" style={{ fontSize: 12, fontWeight: 700, fill: 'var(--text)' }}>
+        {payload.topic}
+      </text>
+      <text x={cx} y={cy + 12} textAnchor="middle" style={{ fontSize: 11, fill: 'var(--text-muted)' }}>
+        {payload.count} · {Math.round((percent || 0) * 100)}%
+      </text>
+      <Sector
+        cx={cx}
+        cy={cy}
+        innerRadius={innerRadius}
+        outerRadius={outerRadius + 5}
+        startAngle={startAngle}
+        endAngle={endAngle}
+        fill={fill}
+      />
+    </g>
+  )
+}
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className="text-xs font-medium px-2.5 py-1 rounded-lg transition"
+      style={
+        active
+          ? { background: 'var(--accent-light)', color: 'var(--accent)' }
+          : { background: 'transparent', color: 'var(--text-muted)' }
+      }
+    >
+      {children}
+    </button>
+  )
+}
+
 function LeetCodeCard() {
   const [data, setData] = useState<LeetCodeStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [view, setView] = useState<LeetView>('topics')
+  const [activeTopic, setActiveTopic] = useState(0)
 
   useEffect(() => {
     axios
@@ -175,6 +274,11 @@ function LeetCodeCard() {
   const chartData = data
     ? CHART_DATA_TEMPLATE.map((t) => ({ name: t.name, count: data[t.key], color: t.color }))
     : []
+
+  const pieData = data ? buildTopicPie(data.topics ?? []) : []
+  const safeActive = pieData.length ? Math.min(activeTopic, pieData.length - 1) : 0
+  // Guard against an older agent (pre-topics /leetcode) that omits `recent`.
+  const recent = data?.recent ?? []
 
   return (
     <Card
@@ -191,29 +295,132 @@ function LeetCodeCard() {
       )}
       {!loading && !error && data && (
         <>
-          <div className="h-36">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{
-                    fontSize: 12,
-                    borderRadius: 8,
-                    border: '1px solid var(--border)',
-                    boxShadow: 'var(--shadow)',
-                  }}
-                  cursor={{ fill: 'var(--bg)' }}
-                  formatter={(v: number) => [v, 'Solved']}
-                />
-                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                  {chartData.map((entry, i) => (
-                    <Cell key={i} fill={entry.color} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="flex gap-1">
+            <TabButton active={view === 'topics'} onClick={() => setView('topics')}>Topics</TabButton>
+            <TabButton active={view === 'difficulty'} onClick={() => setView('difficulty')}>Difficulty</TabButton>
+            <TabButton active={view === 'recent'} onClick={() => setView('recent')}>Recent</TabButton>
           </div>
+
+          {view === 'topics' && (
+            pieData.length === 0 ? (
+              <p className="text-sm py-8 text-center" style={{ color: 'var(--text-muted)' }}>
+                No topic data yet — solve a problem and the poller will fill this in.
+              </p>
+            ) : (
+              <>
+                <div className="h-44">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={pieData}
+                        dataKey="count"
+                        nameKey="topic"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={48}
+                        outerRadius={70}
+                        paddingAngle={2}
+                        activeIndex={safeActive}
+                        activeShape={renderActiveTopic}
+                        onMouseEnter={(_, i) => setActiveTopic(i)}
+                        onClick={(_, i) => setActiveTopic(i)}
+                      >
+                        {pieData.map((entry, i) => (
+                          <Cell key={i} fill={entry.color} stroke="var(--border)" strokeWidth={1} cursor="pointer" />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                  {pieData.map((entry, i) => (
+                    <button
+                      key={entry.topic}
+                      onClick={() => setActiveTopic(i)}
+                      className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md transition"
+                      style={{
+                        background: i === safeActive ? 'var(--accent-light)' : 'transparent',
+                        color: i === safeActive ? 'var(--accent)' : 'var(--text-muted)',
+                      }}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: entry.color }} />
+                      <span className="truncate max-w-[7rem]">{entry.topic}</span>
+                      <span className="opacity-60">{entry.count}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )
+          )}
+
+          {view === 'difficulty' && (
+            <div className="h-44">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      fontSize: 12,
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      boxShadow: 'var(--shadow)',
+                    }}
+                    cursor={{ fill: 'var(--bg)' }}
+                    formatter={(v: number) => [v, 'Solved']}
+                  />
+                  <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                    {chartData.map((entry, i) => (
+                      <Cell key={i} fill={entry.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {view === 'recent' && (
+            <div className="max-h-44 overflow-y-auto flex flex-col gap-1.5 pr-1">
+              {recent.length === 0 && (
+                <p className="text-sm py-8 text-center" style={{ color: 'var(--text-muted)' }}>
+                  No recent solves.
+                </p>
+              )}
+              {recent.map((p) => (
+                <div
+                  key={p.slug}
+                  className="flex flex-col gap-1 pb-1.5"
+                  style={{ borderBottom: '1px solid var(--border)' }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium truncate" style={{ color: 'var(--text)' }}>{p.title}</span>
+                    <span className="text-[10px] font-semibold shrink-0" style={{ color: difficultyColor(p.difficulty) }}>
+                      {p.difficulty}
+                    </span>
+                  </div>
+                  {p.topics.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {p.topics.slice(0, 4).map((t) => (
+                        <span
+                          key={t}
+                          className="text-[10px] px-1 py-0.5 rounded"
+                          style={{ background: 'var(--bg)', color: 'var(--text-muted)' }}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                      {p.topics.length > 4 && (
+                        <span className="text-[10px] px-1 py-0.5" style={{ color: 'var(--text-muted)' }}>
+                          +{p.topics.length - 4}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div
             className="flex items-center justify-between pt-2"
             style={{ borderTop: '1px solid var(--border)' }}

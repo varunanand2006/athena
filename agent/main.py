@@ -1179,6 +1179,40 @@ def leetcode():
 
             cur.execute("SELECT MAX(solved_at) FROM leetcode_problems")
             last_row = cur.fetchone()
+
+            # Per-topic counts (topics is a TEXT[] populated from LeetCode's API).
+            # Unnest the arrays and group; ordered most-solved first so the UI can
+            # show the strongest topics / group a long tail into "Other".
+            cur.execute(
+                """
+                SELECT topic, COUNT(*) AS c
+                FROM leetcode_problems
+                CROSS JOIN LATERAL unnest(topics) AS topic
+                GROUP BY topic
+                ORDER BY c DESC, topic ASC
+                """
+            )
+            topics = [{"topic": t, "count": int(c)} for t, c in cur.fetchall()]
+
+            # Recent solves with their topics, for the card's "Recent" view.
+            cur.execute(
+                """
+                SELECT title, slug, difficulty, topics, solved_at
+                FROM leetcode_problems
+                ORDER BY solved_at DESC
+                LIMIT 30
+                """
+            )
+            recent = [
+                {
+                    "title": title,
+                    "slug": slug,
+                    "difficulty": difficulty,
+                    "topics": list(topic_list or []),
+                    "solved_at": solved_at.date().isoformat() if solved_at else None,
+                }
+                for title, slug, difficulty, topic_list, solved_at in cur.fetchall()
+            ]
     finally:
         conn.close()
 
@@ -1193,6 +1227,8 @@ def leetcode():
         "medium": medium,
         "hard": hard,
         "last_solved_date": last,
+        "topics": topics,
+        "recent": recent,
     }
 
 
