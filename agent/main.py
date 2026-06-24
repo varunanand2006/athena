@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 import re
 import time
@@ -74,6 +75,11 @@ OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://mcp-server.athena.svc.cluster.local")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://frontend.athena.svc.cluster.local")
+# Phase 22: Prometheus lives in the `monitoring` namespace, ClusterIP-only (never
+# ingress-exposed). The agent reaches it cross-namespace to surface a few metrics
+# in the /system view; PromQL never touches the browser. /system/metrics degrades
+# gracefully when this is unreachable (e.g. monitoring not yet rolled out).
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus.monitoring.svc.cluster.local:9090")
 
 _PG_DSN = (
     f"postgresql://{os.getenv('POSTGRES_USER', 'athena')}"
@@ -1557,5 +1563,103 @@ async def system_health():
                 "max_tokens": mem_ctx["max_tokens"],
                 "over_cap": mem_ctx["over_cap"],
             },
+        },
+    }
+
+
+# --- Phase 22: /system/metrics (Prometheus passthrough) ---------------------
+# A handful of instant PromQL queries surfaced in the /system view, mirroring the
+# /system/health fan-out discipline (parallel, short per-query timeout, graceful
+# degradation). The frontend never sees PromQL — only the distilled JSON below.
+# Headline numbers match the existing card style (a total + an optional breakdown).
+_SYSTEM_METRIC_QUERIES = {
+    # LLM: p95 latency over the last 5m, 24h token spend, 1h error count.
+    "llm_p95_seconds": "histogram_quantile(0.95, sum(rate(athena_llm_request_seconds_bucket[5m])) by (le))",
+    "llm_tokens_24h": "sum(increase(athena_llm_tokens_total[24h]))",
+    "llm_errors_1h": "sum(increase(athena_llm_errors_total[1h]))",
+    # Background jobs: hard failures and the Phase 22 silent-failure signal, per job.
+    "job_failures_24h": "sum by (job) (increase(athena_job_failures_total[24h]))",
+    "job_empty_24h": "sum by (job) (increase(athena_job_empty_result_total[24h]))",
+    # RAG retrieval-quality smoke signal: fraction of find_documents that came back empty.
+    "rag_empty_rate_6h": "sum(rate(athena_rag_empty_total[6h])) / clamp_min(sum(rate(athena_rag_lookups_total[6h])), 1e-9)",
+}
+
+
+def _prom_scalar(result: list) -> float | None:
+    """First sample of an instant-vector result as a float, or None when absent
+    or non-finite (Prometheus serialises NaN/±Inf as strings, e.g. an empty
+    histogram_quantile or a 0/0 ratio)."""
+    if not result:
+        return None
+    try:
+        value = float(result[0]["value"][1])
+    except (KeyError, IndexError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _prom_by_job(result: list) -> dict:
+    """Instant-vector grouped by `job` → {job: value}, dropping non-finite samples."""
+    out: dict[str, float] = {}
+    for series in result or []:
+        job = series.get("metric", {}).get("job")
+        if not job:
+            continue
+        try:
+            value = float(series["value"][1])
+        except (KeyError, IndexError, ValueError):
+            continue
+        if math.isfinite(value):
+            out[job] = value
+    return out
+
+
+async def _prom_query(client: httpx.AsyncClient, expr: str) -> list:
+    """Run one instant query against the Prometheus HTTP API, returning the raw
+    `result` list. Raises on transport/HTTP error so the caller can mark the whole
+    section unavailable (one dead Prometheus shouldn't show half-blank cards)."""
+    resp = await client.get(
+        f"{PROMETHEUS_URL}/api/v1/query", params={"query": expr}, timeout=3.0
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    if body.get("status") != "success":
+        raise ValueError(f"prometheus query failed: {body.get('error')}")
+    return body.get("data", {}).get("result", [])
+
+
+@app.get("/system/metrics")
+async def system_metrics():
+    """Distilled Prometheus metrics for the /system view. Returns
+    {"available": false} (rather than erroring) when Prometheus is unreachable,
+    so the frontend simply hides the section — the health view never depends on
+    monitoring being rolled out."""
+    try:
+        async with httpx.AsyncClient() as client:
+            results = await asyncio.gather(
+                *[_prom_query(client, expr) for expr in _SYSTEM_METRIC_QUERIES.values()]
+            )
+    except Exception:
+        logger.warning("prometheus unreachable for /system/metrics", extra={"field": "available=false"})
+        return {"available": False}
+
+    raw = dict(zip(_SYSTEM_METRIC_QUERIES.keys(), results))
+    failures = _prom_by_job(raw["job_failures_24h"])
+    empty = _prom_by_job(raw["job_empty_24h"])
+    p95 = _prom_scalar(raw["llm_p95_seconds"])
+
+    return {
+        "available": True,
+        "llm": {
+            "p95_latency_ms": round(p95 * 1000) if p95 is not None else None,
+            "tokens_24h": round(_prom_scalar(raw["llm_tokens_24h"]) or 0),
+            "errors_1h": round(_prom_scalar(raw["llm_errors_1h"]) or 0),
+        },
+        "jobs": {
+            "failures_24h": {"total": round(sum(failures.values())), "by_job": {k: round(v) for k, v in failures.items()}},
+            "empty_24h": {"total": round(sum(empty.values())), "by_job": {k: round(v) for k, v in empty.items()}},
+        },
+        "rag": {
+            "empty_rate_6h": _prom_scalar(raw["rag_empty_rate_6h"]),
         },
     }

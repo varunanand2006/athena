@@ -23,8 +23,23 @@ interface SystemHealth {
   }
 }
 
+interface SystemMetrics {
+  available: boolean
+  llm: {
+    p95_latency_ms: number | null
+    tokens_24h: number
+    errors_1h: number
+  }
+  jobs: {
+    failures_24h: { total: number; by_job: Record<string, number> }
+    empty_24h: { total: number; by_job: Record<string, number> }
+  }
+  rag: { empty_rate_6h: number | null }
+}
+
 export default function SystemView() {
   const [health, setHealth] = useState<SystemHealth | null>(null)
+  const [metrics, setMetrics] = useState<SystemMetrics | null>(null)
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -40,11 +55,27 @@ export default function SystemView() {
     }
   }, [])
 
+  // Metrics come from Prometheus via the agent. They degrade independently of
+  // health: if monitoring isn't reachable the section just hides, and a failed
+  // fetch never trips the page-level error state.
+  const fetchMetrics = useCallback(async () => {
+    try {
+      const res = await axios.get<SystemMetrics>('/system/metrics', { timeout: 8_000 })
+      setMetrics(res.data)
+    } catch {
+      setMetrics(null)
+    }
+  }, [])
+
   useEffect(() => {
     fetchHealth()
-    const id = setInterval(fetchHealth, 15_000)
+    fetchMetrics()
+    const id = setInterval(() => {
+      fetchHealth()
+      fetchMetrics()
+    }, 15_000)
     return () => clearInterval(id)
-  }, [fetchHealth])
+  }, [fetchHealth, fetchMetrics])
 
   return (
     <div className="h-full overflow-y-auto bg-transparent pt-8">
@@ -60,6 +91,7 @@ export default function SystemView() {
           <>
             <ServicesSection services={health.services} />
             <DataSection data={health.data} />
+            {metrics?.available && <MetricsSection metrics={metrics} />}
           </>
         )}
       </div>
@@ -158,7 +190,69 @@ function DataSection({ data }: { data: SystemHealth['data'] }) {
   )
 }
 
-function Card({ title, value, children }: { title: string; value: number; children?: React.ReactNode }) {
+function MetricsSection({ metrics }: { metrics: SystemMetrics }) {
+  const { llm, jobs, rag } = metrics
+  const p95 = llm.p95_latency_ms
+  const emptyTotal = jobs.empty_24h.total
+  const failTotal = jobs.failures_24h.total
+  const ragPct = rag.empty_rate_6h === null ? null : Math.round(rag.empty_rate_6h * 100)
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-semibold text-sm px-1" style={{ color: 'var(--text)' }}>Observability</h2>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <Card title="LLM p95 latency" value={p95 ?? 0} unit={p95 === null ? '— no data' : 'ms (5m)'}>
+          <div className="text-xs flex gap-3" style={{ color: 'var(--text-muted)' }}>
+            <span>tokens 24h: {llm.tokens_24h.toLocaleString()}</span>
+            <span style={{ color: llm.errors_1h > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+              errors 1h: {llm.errors_1h}
+            </span>
+          </div>
+        </Card>
+
+        <Card
+          title="Silent failures 24h"
+          value={emptyTotal}
+          unit="empty results"
+          accent={emptyTotal > 0}
+        >
+          <JobBreakdown by={jobs.empty_24h.by_job} empty="no empty-result jobs" />
+        </Card>
+
+        <Card title="Job failures 24h" value={failTotal} accent={failTotal > 0}>
+          <JobBreakdown by={jobs.failures_24h.by_job} empty="no job failures" />
+        </Card>
+
+        <Card
+          title="RAG empty-rate"
+          value={ragPct ?? 0}
+          unit={ragPct === null ? '— no lookups' : '% (6h)'}
+          accent={ragPct !== null && ragPct >= 50}
+        >
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            find_documents returning nothing
+          </p>
+        </Card>
+      </div>
+    </section>
+  )
+}
+
+function JobBreakdown({ by, empty }: { by: Record<string, number>; empty: string }) {
+  const entries = Object.entries(by).filter(([, v]) => v > 0)
+  if (entries.length === 0) {
+    return <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{empty}</p>
+  }
+  return (
+    <div className="text-xs flex flex-wrap gap-x-3 gap-y-0.5" style={{ color: 'var(--accent)' }}>
+      {entries.map(([job, count]) => (
+        <span key={job}>{job}: {count}</span>
+      ))}
+    </div>
+  )
+}
+
+function Card({ title, value, children, unit, accent }: { title: string; value: number; children?: React.ReactNode; unit?: string; accent?: boolean }) {
   return (
     <div
       className="rounded-2xl p-5 flex flex-col gap-2 glass-panel"
@@ -167,8 +261,9 @@ function Card({ title, value, children }: { title: string; value: number; childr
       <p className="text-xs uppercase tracking-wider font-medium" style={{ color: 'var(--text-muted)' }}>
         {title}
       </p>
-      <p className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
+      <p className="text-2xl font-semibold flex items-baseline gap-1.5" style={{ color: accent ? 'var(--accent)' : 'var(--text)' }}>
         {value.toLocaleString()}
+        {unit && <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>{unit}</span>}
       </p>
       {children}
     </div>
