@@ -1,7 +1,11 @@
 # Phase 24 — Voice service (STT + TTS). Built on xdev-sr, runs on xdev-sr.
 # NOTE: this Dockerfile does NOT read pyproject.toml — keep the pip list below
 # in sync with pyproject.toml by hand (same trap as langchain-openai / metrics.py).
-FROM python:3.12-slim
+#
+# Python 3.10 (NOT 3.12): piper-tts==1.2.0 depends on piper-phonemize, which only
+# publishes wheels up to cp310. On 3.11/3.12 pip fails with
+# "No matching distribution found for piper-phonemize". Pin to 3.10 here.
+FROM python:3.10-slim
 
 WORKDIR /app
 

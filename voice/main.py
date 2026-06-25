@@ -57,7 +57,7 @@ def _load_stt():
 
 
 def _load_tts():
-    from piper import PiperVoice
+    from piper.voice import PiperVoice
 
     model_path = os.path.join(VOICES_DIR, f"{PIPER_VOICE}.onnx")
     config_path = f"{model_path}.json"
