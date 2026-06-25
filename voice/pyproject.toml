@@ -1,0 +1,16 @@
+[project]
+name = "athena-voice"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "faster-whisper>=1.0",
+    "piper-tts==1.2.0",
+    "python-multipart>=0.0.9",
+    "prometheus-client>=0.20",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

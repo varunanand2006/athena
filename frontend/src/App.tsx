@@ -6,6 +6,7 @@ import DashboardView from './pages/DashboardView'
 import HomeView from './pages/HomeView'
 import LibraryView from './pages/LibraryView'
 import SystemView from './pages/SystemView'
+import VoiceView from './pages/VoiceView'
 
 export interface ToolCall {
   tool: string
@@ -84,6 +85,7 @@ export default function App() {
                 />
               }
             />
+            <Route path="/voice" element={<VoiceView />} />
             <Route path="/dashboard" element={<DashboardView />} />
             <Route path="/library" element={<LibraryView />} />
             <Route path="/system" element={<SystemView />} />

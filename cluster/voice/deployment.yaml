@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice
+  namespace: athena
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: voice
+  template:
+    metadata:
+      labels:
+        app: voice
+      annotations:
+        # Phase 22 pattern: annotation-based pod SD — scrape app-port /metrics.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Pin to the AI node (xdev-sr): co-located with the agent, and the whisper
+      # CT2 model wants the RAM. Image is imported here via `k3s ctr` after build.
+      nodeSelector:
+        kubernetes.io/hostname: xdev-sr
+      enableServiceLinks: false
+      containers:
+        - name: voice
+          image: athena-voice:phase24
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            # Phase 22: labels every athena_* metric + JSON log line for this service.
+            - name: SERVICE_NAME
+              value: "voice"
+            - name: PORT
+              value: "8000"
+            # STT (faster-whisper) — base.en at int8 keeps CPU latency tolerable.
+            - name: WHISPER_MODEL
+              value: "base.en"
+            - name: WHISPER_COMPUTE_TYPE
+              value: "int8"
+            # TTS (Piper) — British male "butler" voice baked into the image.
+            - name: PIPER_VOICE
+              value: "en_GB-alan-medium"
+            - name: PIPER_VOICES_DIR
+              value: "/app/voices"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              # Whisper transcription is CPU-bound and bursty; give it headroom.
+              cpu: 2000m
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            # Models load in the lifespan — give them time before readiness.
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 40
+            periodSeconds: 15
+            failureThreshold: 6
