@@ -1,4 +1,5 @@
-"""One-time local OAuth helper to mint a read-only Google Calendar refresh token (Phase 20).
+"""One-time local OAuth helper to mint a Google Calendar refresh token
+(Phase 20 read-only; widened to read+write in Phase 23).
 
 Run this ONCE, on your laptop (NOT in-cluster). It performs the interactive
 OAuth consent flow against an OAuth *Desktop app* client and prints the three
@@ -8,8 +9,12 @@ GCAL_CLIENT_SECRET, GCAL_REFRESH_TOKEN).
 You can reuse the same client_secret_XXX.json from the Gmail OAuth setup —
 the Desktop app client is scope-agnostic; scopes are requested at flow time.
 
-SCOPE: calendar.readonly ONLY — the minted credential physically cannot create,
-edit, or delete events.
+SCOPE: calendar.events (Phase 23) — read + create/update events. This scope also
+technically permits deletion, but the agent never deletes (no delete tool, no
+events().delete() call in agent/calendar_client.py). NOTE: this is wider than the
+Phase 20 calendar.readonly scope, so you MUST re-run this script to mint a fresh
+refresh token with the new scope, update gcal-secret, and rollout-restart the
+agent — the old read-only token cannot create or update events.
 
 Prerequisites:
   1. Google Calendar API enabled in the GCP project.
@@ -28,8 +33,9 @@ import sys
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-# Read-only. Do not widen this.
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+# Read + create/update events (Phase 23). The agent never deletes despite the
+# scope permitting it (enforced in code, not by the token).
+SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
 
 def main() -> None:

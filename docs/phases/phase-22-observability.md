@@ -143,6 +143,21 @@ Committed JSON dashboards: **Athena Overview** (per-service request rate +
 p50/p95 latency, LLM latency + token spend over time, job durations + failure
 counts, RAG empty-rate). This is the screenshot that backs the resume bullet.
 
+### In-frontend `/system/metrics` (follow-on)
+
+Grafana is the deep-dive surface, but a glanceable subset is also folded into the
+app's own `/system` view (the Phase 10 health page), so the operator sees LLM
+latency/token spend, job failures, the silent-failure count, and RAG empty-rate
+without leaving Athena. A `GET /system/metrics` endpoint on the agent runs a
+handful of instant PromQL queries against Prometheus (`prometheus.monitoring.svc`,
+ClusterIP — PromQL never reaches the browser), mirroring the `/system/health`
+fan-out discipline (parallel, short per-query timeout). It **degrades
+gracefully** — returns `{"available": false}` and the frontend hides the section
+when monitoring is unreachable, so the health view never depends on the
+monitoring stack being up. NaN/±Inf samples (idle `histogram_quantile`, 0/0
+ratios) are mapped to `null` and render as "— no data". The nginx `^/(…|system|…)`
+proxy prefix already routes the new sub-path to the agent — no proxy change.
+
 ---
 
 ## Gate

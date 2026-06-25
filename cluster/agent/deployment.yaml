@@ -72,6 +72,12 @@ spec:
             # here without a rebuild; defaults to "athena" in code if unset.
             - name: ATHENA_EMAIL_LABEL
               value: "athena"
+            # Phase 23: fallback timezone for calendar event creation/updates.
+            # The agent reads the primary calendar's own timezone at runtime and
+            # only falls back to this if that lookup fails. Set to the user's
+            # IANA timezone. Change without a rebuild.
+            - name: CALENDAR_TIMEZONE
+              value: "America/New_York"
             - name: POSTGRES_HOST
               value: "postgres.athena.svc.cluster.local"
             - name: OPENAI_API_KEY
@@ -94,10 +100,12 @@ spec:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_DB
-            # Read-only Google Calendar lookup (Phase 20). calendar.readonly scope
-            # only — the credential cannot create/edit/delete events. See
-            # cluster/agent/gcal-secret.example.yaml. Marked optional so the
-            # agent still starts before the secret is applied.
+            # Google Calendar (Phase 20 read; Phase 23 create/update). The
+            # gcal-secret token was widened to calendar.events — read + write,
+            # but the agent never deletes (enforced in code). Same secret keys as
+            # before, so no manifest change beyond this comment; re-mint the token
+            # with scripts/calendar_oauth.py. See gcal-secret.example.yaml. Marked
+            # optional so the agent still starts before the secret is applied.
             - name: GCAL_CLIENT_ID
               valueFrom:
                 secretKeyRef:

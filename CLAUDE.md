@@ -46,6 +46,10 @@ If you're unsure whether something is a planning question or an implementation q
 - **Twilio** for SMS notifications (planned)
 
 ## Current phase
+**Phase 23 (implemented, pending cluster rollout)** — Calendar create + update (foreground writes).
+
+The agent can now CREATE and UPDATE Google Calendar events on explicit request (`create_calendar_event` / `update_calendar_event` in `agent/main.py`, backed by `calendar_client.create_event`/`update_event`). **No delete** (no `events().delete()` call, by construction) and **no Gmail writes** (Gmail stays read-only — no Gmail scope grants drafts/labels without also granting send, and the requirement was no sending). Writes are **foreground-only** (in `CHAT_TOOLS`, never in background reflection — same discipline as `update_memory`). The existing `gcal-secret` token was **widened in place** from `calendar.readonly` to `calendar.events`, so re-mint with `scripts/calendar_oauth.py` before rollout; the shared Phase 21 calendar feed now runs on that write-capable token by choice. Naive datetimes are interpreted in the primary calendar's own timezone (fallback `CALENDAR_TIMEZONE` env). See `docs/phases/phase-23-calendar-write.md`.
+
 **Phase 22 (implemented, pending cluster rollout)** — Observability: Prometheus metrics + structured JSON logs.
 
 Turns "I built services" into "I operate a system." Metrics-first by design; Loki, tracing, and alerting are explicitly deferred (see ADR 013).
@@ -85,6 +89,7 @@ See `docs/phases/phase-21-memory-feeds.md`, `docs/adr/012-external-memory-feeds.
 | 19–20 | Gmail + Google Calendar read-only lookup |
 | 21    | Safe foreground memory correction (`update_memory`) + automatic calendar/labeled-email feeds (`origin` provenance) |
 | 22    | Observability — Prometheus metrics + structured JSON logs (hand-rolled Prometheus + Grafana on vlinux2, annotation-based pod SD) |
+| 23    | Calendar create + update (foreground writes; `calendar.events` scope, no delete, no Gmail writes) |
 
 ## Coding conventions
 - Python services use `pyproject.toml`, not `requirements.txt`

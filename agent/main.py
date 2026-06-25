@@ -654,20 +654,23 @@ def search_email(query: str) -> str:
     return "\n".join(lines)
 
 
-# --- Read-only Google Calendar lookup (Phase 20) ---------------------------
-# Calendar is an on-demand lookup source — the agent reaches for it to answer
-# schedule questions. Same discipline as search_email: lean digest, read-only.
+# --- Google Calendar (Phase 20 read; Phase 23 create/update) ---------------
+# Calendar is an on-demand lookup source AND, since Phase 23, a place the agent
+# can create/update events on explicit request. Writes are FOREGROUND-ONLY (these
+# tools live in CHAT_TOOLS, never in background reflection) and never delete —
+# calendar_client.py has no events().delete() path. Same lean-digest discipline.
 
 
 @tool
 def get_calendar_events(timeframe: str) -> str:
-    """Look up the user's Google Calendar READ-ONLY and return a compact list of
-    events for the requested timeframe. Use this for questions like "what's on
-    my schedule today?", "do I have anything this week?", "when is my next
-    interview?", "am I free on Friday?". Accepts natural-language timeframes
-    such as "today", "tomorrow", "this week", "next 7 days", "next month".
-    This is READ-ONLY: you can view events but CANNOT create, edit, or delete
-    anything. Returns up to 10 events; answer from them."""
+    """Look up the user's Google Calendar and return a compact list of events for
+    the requested timeframe. Use this for questions like "what's on my schedule
+    today?", "do I have anything this week?", "when is my next interview?", "am I
+    free on Friday?". Accepts natural-language timeframes such as "today",
+    "tomorrow", "this week", "next 7 days", "next month". Returns up to 10 events
+    (each with an [id: ...] you can pass to update_calendar_event to reschedule or
+    edit it). This tool only READS — to add an event use create_calendar_event, to
+    change one use update_calendar_event."""
     now = datetime.now(timezone.utc)
 
     tf = timeframe.lower().strip()
@@ -706,12 +709,94 @@ def get_calendar_events(timeframe: str) -> str:
 
     lines = [f"{len(events)} event(s) for '{timeframe}':"]
     for ev in events:
-        lines.append(f"- {ev['start']} → {ev['end']}: {ev['summary']}")
+        lines.append(f"- {ev['start']} → {ev['end']}: {ev['summary']}  [id: {ev['id']}]")
         if ev["location"]:
             lines.append(f"  Location: {ev['location']}")
         if ev["description"]:
             lines.append(f"  {ev['description']}")
     return "\n".join(lines)
+
+
+# --- Calendar writes (Phase 23) --------------------------------------------
+# Foreground-only: these are in CHAT_TOOLS (gpt-4o-mini, user watching), NEVER in
+# the background reflection path — same discipline as update_memory's destructive
+# replace_events. The underlying client holds calendar.events scope and never
+# deletes. Relative dates ("tomorrow", "next Friday") resolve against today's
+# date, which the chat path stamps at the top of the prompt.
+
+
+@tool
+def create_calendar_event(
+    summary: str,
+    start: str,
+    end: str,
+    description: str | None = None,
+    location: str | None = None,
+) -> str:
+    """Create a NEW event on the user's Google Calendar. Call this ONLY when the
+    user explicitly asks to schedule/add/book/put something on their calendar
+    (e.g. "schedule a mock interview Thursday 3pm", "add a dentist appointment
+    next Monday 9-10am"). `summary` is the event title. `start` and `end` are ISO
+    8601 strings: use "YYYY-MM-DDTHH:MM:SS" for a timed event (local time — the
+    calendar's timezone is applied automatically) or "YYYY-MM-DD" for an all-day
+    event. ALWAYS resolve relative dates/times ("tomorrow", "next Friday", "3pm")
+    against today's date given at the top of this prompt before calling. `end`
+    must be after `start`. `description` and `location` are optional. Confirm the
+    resolved date/time back to the user in your reply."""
+    try:
+        ev = calendar_client.create_event(
+            summary=summary, start=start, end=end,
+            description=description, location=location,
+        )
+    except calendar_client.CalendarNotConfigured as e:
+        return str(e)
+    except Exception as e:
+        return f"Could not create the event: {e}"
+
+    loc = f" at {ev['location']}" if ev["location"] else ""
+    link = f"\n{ev['htmlLink']}" if ev["htmlLink"] else ""
+    return (
+        f"Created '{ev['summary']}'{loc}: {ev['start']} → {ev['end']} "
+        f"[id: {ev['id']}].{link}"
+    )
+
+
+@tool
+def update_calendar_event(
+    event_id: str,
+    summary: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    description: str | None = None,
+    location: str | None = None,
+) -> str:
+    """UPDATE an EXISTING calendar event — reschedule it or edit its details.
+    Call this ONLY when the user explicitly asks to move/reschedule/change an
+    event already on their calendar (e.g. "move my dentist appointment to 4pm",
+    "rename the Stripe call"). You MUST pass `event_id` — first call
+    get_calendar_events to find the event and read its [id: ...], then pass that
+    id here. Only the fields you provide are changed (the rest stay as they were);
+    when rescheduling, pass BOTH `start` and `end` so the new times stay
+    consistent. Date/time format and relative-date resolution are the same as
+    create_calendar_event. This NEVER deletes events — if the user wants an event
+    deleted, tell them you can't delete, only reschedule or edit. Confirm the
+    change back to the user in your reply."""
+    try:
+        ev = calendar_client.update_event(
+            event_id=event_id, summary=summary, start=start, end=end,
+            description=description, location=location,
+        )
+    except calendar_client.CalendarNotConfigured as e:
+        return str(e)
+    except Exception as e:
+        return f"Could not update the event: {e}"
+
+    loc = f" at {ev['location']}" if ev["location"] else ""
+    link = f"\n{ev['htmlLink']}" if ev["htmlLink"] else ""
+    return (
+        f"Updated '{ev['summary']}'{loc}: {ev['start']} → {ev['end']} "
+        f"[id: {ev['id']}].{link}"
+    )
 
 
 # The single tool set handed to the chat agent. Both /chat and /chat/stream
@@ -732,6 +817,8 @@ CHAT_TOOLS = [
     upcoming,
     search_email,
     get_calendar_events,
+    create_calendar_event,
+    update_calendar_event,
 ]
 
 
@@ -740,7 +827,8 @@ SYSTEM_PROMPT = (
     "You have access to these tools: web_search, find_documents, load_document, "
     "lookup_leetcode, list_documents, get_table_of_contents, get_document_summary, "
     "write_memory, update_memory, list_memories, search_memory, upcoming, "
-    "search_email, and get_calendar_events. "
+    "search_email, get_calendar_events, create_calendar_event, and "
+    "update_calendar_event. "
     "For content questions about the user's own documents — background, resume, skills, "
     "projects, notes — follow this two-step flow: (1) call find_documents(query) to "
     "identify the relevant document(s) by summary similarity, then (2) call "
@@ -800,9 +888,17 @@ SYSTEM_PROMPT = (
     "\"am I free on <day>?\", \"do I have anything this week?\", \"when is my "
     "next <event>?\" — you MUST call get_calendar_events with the appropriate "
     "timeframe (e.g. \"today\", \"tomorrow\", \"this week\", \"next 7 days\") "
-    "and answer from the returned events. Calendar access is READ-ONLY: you can "
-    "view events but CANNOT create, edit, or delete anything — never claim or "
-    "offer to do any of those. "
+    "and answer from the returned events. "
+    "CALENDAR WRITES — you CAN schedule and edit events, but ONLY on an explicit "
+    "request. When the user explicitly asks to schedule/add/book an event, call "
+    "create_calendar_event; resolve any relative date/time (\"tomorrow\", \"next "
+    "Friday 3pm\") against today's date at the top of this prompt into ISO 8601 "
+    "before calling, and confirm the resolved time back to them. When the user "
+    "explicitly asks to move/reschedule/rename an EXISTING event, first call "
+    "get_calendar_events to find it and read its [id: ...], then call "
+    "update_calendar_event with that id. You CANNOT DELETE or cancel events — if "
+    "asked, say you can only reschedule or edit, not delete. Do NOT create or "
+    "change events on your own initiative — only when explicitly asked. "
     "Never say you cannot access information — use the appropriate tool instead."
 )
 
